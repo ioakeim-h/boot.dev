@@ -1,4 +1,3 @@
-```markdown
 # Windows Subsystem for Linux (WSL) Setup Guide
 
 ## Install Ubuntu on WSL
