@@ -89,7 +89,7 @@ find some_directory -name "*chad*"    # File names including the word "chad"
 Linux file permissions are represented by a 10-character string that appears at the beginning of a file listing when using `ls -l`. This string defines access rights for three categories of users: owner, group, and others.
 
 ## The 10-Character Permission String
-
+```
 -rwxr-xr--
 │└─┬──┴─┬──┴─┬──
 │  │    │    │
@@ -97,7 +97,7 @@ Linux file permissions are represented by a 10-character string that appears at 
 │  │    └────── Permissions for group
 │  └─────────── Permissions for owner
 └────────────── File type indicator
-
+```
 
 ### 1. First Character: File Type
 - `-` Regular file
