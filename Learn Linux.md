@@ -198,7 +198,10 @@ This will update the `PATH` variable for the current shell session only. The nex
 2. Navigate to the home directory and open the file using `nano .bashrc`. Add the export command to the end of the file.
 3. Press CRTL + O, then press Enter and CRTL + X to exit.
 
-Troubleshooting: Ensure you use the absolute path without a trailing slash. The final result should look something like this: `export PATH="$PATH:/home/ihadjimpalasis/worldbanc/private/bin"`
+Troubleshooting: 
+* Ensure you use the absolute path without a trailing slash. The final result should look something like this: 
+`export PATH="$PATH:/home/ihadjimpalasis/worldbanc/private/bin"`
+* When working in WSL and accessing Windows files from the shell, you must include `/mnt`, the mount point for Windows drives, in the path. For example, `C:\` in Windows becomes `/mnt/c/` in WSL.
 
 ---
 
