@@ -329,7 +329,7 @@ The `xxd` command can be used to convert this data to hexadecimal format:
 00000080: 008b 3a06
 ```
 
-We can then decompress this with Python and view the text:
+We can decompress this with Python and view the text:
 ```python
 import zlib
 
