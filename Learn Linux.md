@@ -283,6 +283,7 @@ ps aux # shows all processes
 
 The `top` command is a powerful tool that allows you to see which programs are using the most resources on your computer. By default, `top` sorts the processes by `%CPU` usage, with the most CPU-intensive processes at the top. Another useful resource to sort by is RAM (`%MEM`) usage. To sort by memory usage, press `M` (uppercase) while `top` is running.
 
+---
 
 # Packages
 
@@ -301,3 +302,49 @@ sudo apt install neovim     # install neovim
 3. In the very bottom-left corner of VS Code, there should be a green or blue button. Click on that and select "Connect to WSL using Distro" and select "Ubuntu".
 
 I recommend pinning this new window to your task-bar so that you can always open the WSL-enabled version of VS Code in one click. 
+
+---
+
+# Fun stuff
+
+## From binary to text
+
+I extracted binary data from a recent commit by using `cat` on the `.git/objects/<SHA>` file:
+```bash
+xK
+0@]L&QD(|liObo
+Pl98Jc;gSy0P.L(7_l\{y{4pQvJ#UpJ*ynI}:
+```
+
+The `xxd` command can be used to convert this data to hexadecimal format:
+```bash
+00000000: 7801 9d8d 4b0a c230 1040 5de7 14b3 17c3  x...K..0.@].....
+00000010: 4c9a 2651 44f4 28d3 7c6c b069 a08e f7b7  L.&QD.(.|l.i....
+00000020: 0b4f e0ee f1e0 f162 6fad 0a50 a083 6c39  .O.....bo..P..l9
+00000030: c338 194a b690 633b a167 1753 1e79 30d6  .8.J..c;.g.S.y0.
+00000040: 50f0 c5f1 c82e 4ce8 b028 fec8 dc37 a89d  P.....L..(...7..
+00000050: 5fb9 b6d3 0cd7 1fea f9fe 6c5c 171d 7bbb  _.........l\..{.
+00000060: 0179 7b0e 34a0 f570 c401 51ed 761f 4afe  .y{.4..p..Q.v.J.
+00000070: 2355 8f0b 704a 10fb 2a79 95b7 6e49 7d01  #U..pJ..*y..nI}.
+00000080: 008b 3a06
+```
+
+We can then decompress this with Python and view the text:
+```python
+import zlib
+
+hex_data = bytes.fromhex("""
+78 01 9d 8d 4b 0a c2 30 10 40 5d e7 14 b3 17 c3
+4c 9a 26 51 44 f4 28 d3 7c 6c b0 69 a0 8e f7 b7
+0b 4f e0 ee f1 e0 f1 62 6f ad 0a 50 a0 83 6c 39
+c3 38 19 4a b6 90 63 3b a1 67 17 53 1e 79 30 d6
+50 f0 c5 f1 c8 2e 4c e8 b0 28 fe c8 dc 37 a8 9d
+5f b9 b6 d3 0c d7 1f ea f9 fe 6c 5c 17 1d 7b bb
+01 79 7b 0e 34 a0 f5 70 c4 01 51 ed 76 1f 4a fe
+23 55 8f 0b 70 4a 10 fb 2a 79 95 b7 6e 49 7d 01
+00 8b 3a 06
+""")
+
+decompressed = zlib.decompress(hex_data)
+print(decompressed.decode('utf-8', errors='replace'))
+```
