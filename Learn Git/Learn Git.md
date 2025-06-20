@@ -528,6 +528,7 @@ When I'm working by myself, I usually stick to a single branch, `main`. I mostly
 2. `git add .` (or `git add <files>` if I only want to add specific files)
 3. `git commit -m "a message describing the changes"`
 4. `git push origin main`
+5. When I need to update my local using the remote,  I just use `git clone <url>`
 
 ## Team workflow
 
