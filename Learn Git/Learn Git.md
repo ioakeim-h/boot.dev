@@ -516,8 +516,9 @@ Everything in the `temp/` directory would be ignored except for `instructions.md
 
 0. Configure Git
 1. Configure Git to rebase by default on pull, rather than merge to keep a linear history (`git config --global pull.rebase true`)
-2. Set default branch (`git config --global init.defaultBranch main`).
-3. Create a new Git repository (`git init` or clone).
+2. Authenticate Git with GitHub (Install GitHub CLI with `curl -sS https://webi.sh/gh | sh` and login through your browser using `gh auth login`)
+3. Set default branch (`git config --global init.defaultBranch main`).
+4. Create a new Git repository (`git init` or clone).
 
 ## Solo workflow
 
