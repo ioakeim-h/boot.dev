@@ -1,4 +1,4 @@
-# Basic Aspects of a Class
+# Fundamentals of Classes
 
 ## Classes and instances
 
@@ -50,3 +50,31 @@ print(soldier_two.armor)
 print(soldier_two.num_weapons)
 # prints "1"
 ```
+
+## Class vs instance variables
+
+Instance variables vary from object to object and are **declared in the constructor**. They are more common:
+```python
+class Wall:
+    def __init__(self):
+        self.height = 10 
+
+south_wall = Wall()
+south_wall.height = 20 # only updates this instance of a wall
+```
+
+Class (or static) variables are shared between instances of the same class and are **declared at the top level of a class definition**. They are less common:
+```python
+class Wall:
+    height = 10 
+
+south_wall = Wall()
+Wall.height = 20 # updates all instances of a Wall
+```
+
+Generally speaking, stay away from class variables. Just like global variables, class variables are usually a bad idea because they make it hard to keep track of which parts of your program are making updates. Also, avoid declaring instance variables inside methods other than `__init__`.
+
+---
+
+# Encapsulation
+
