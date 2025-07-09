@@ -210,3 +210,64 @@ Polymorphism is the ability of a variable, function or object to take on multipl
 
 - "poly" = "many"
 - "morph" = "form"
+
+For example, classes in the same hierarchical tree may have methods with the same name and signature but different implementations. Here's a simple example:
+
+```python
+class Creature():
+    def move(self):
+        print("the creature moves")
+
+class Dragon(Creature):
+    def move(self):
+        print("the dragon flies")
+
+class Kraken(Creature):
+    def move(self):
+        print("the kraken swims")
+
+for creature in [Creature(), Dragon(), Kraken()]:
+    creature.move()
+# prints:
+# the creature moves
+# the dragon flies
+# the kraken swims
+```
+
+Because all three classes have a `.move()` method, we can shove the objects into a single list, and call the same method on each of them, even though the implementation (method body) is different.
+
+## Operator Overloading
+
+Another kind of built-in polymorphism in Python is the ability to override how an operator works. For example, the `+` operator works for built-in types like integers and strings. Custom classes on the other hand don't have any built-in support for those operators:
+```python
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+
+p1 = Point(4, 5)
+p2 = Point(2, 3)
+p3 = p1 + p2
+# TypeError: unsupported operand type(s) for +: 'Point' and 'Point'
+```
+
+But we can add our own support! If we create an `__add__(self, other)` method on our class, the Python interpreter will use it when instances of the class are being added with the `+` operator. Here's an example:
+
+```python
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __add__(self, point):
+        x = self.x + point.x
+        y = self.y + point.y
+        return Point(x, y)
+
+p1 = Point(4, 5)   # (4, 5)
+p2 = Point(2, 3)   # (2, 3)
+p3 = p1 + p2       # calls Point.__add__(p1, p2) → (6, 8)
+```
+
+Now, when `p1 + p2` is executed, under the hood the Python interpreter just calls `p1.__add__(p2)`.
