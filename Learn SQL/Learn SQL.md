@@ -1,0 +1,552 @@
+<h1>Welcome to my SQL Guide</h1>
+
+Choose your topic from the list below
+
+- [Docker for SQL Server](#docker-for-sql-server)
+  - [Volumes](#volumes)
+    - [Managing Permissions](#managing-permissions)
+  - [Containerize SQL Server](#containerize-sql-server)
+    - [Authentication](#authentication)
+    - [Run](#run)
+    - [Run with --env-file](#run-with---env-file)
+  - [Querying](#querying)
+    - [Interactive Terminal](#interactive-terminal)
+    - [Command Line Queries](#command-line-queries)
+    - [Script Files](#script-files)
+  - [Security](#security)
+    - [Admin User](#admin-user)
+  - [Database Recovery: WORK](#database-recovery-work)
+    - [Backups: WORK](#backups-work)
+      - [Create a Backup via SSMS (Within your Container): WORK](#create-a-backup-via-ssms-within-your-container-work)
+      - [Store Backup to a Volume: WORK](#store-backup-to-a-volume-work)
+- [Database Reproducibility](#database-reproducibility)
+  - [Designing Safe Migrations](#designing-safe-migrations)
+    - [Multi-phase Deployment](#multi-phase-deployment)
+    - [Reversible Migrations](#reversible-migrations)
+  - [Migration Tools](#migration-tools)
+    - [High-level Workflow](#high-level-workflow)
+    - [Flyway](#flyway)
+      - [Common Workflows with Flyway](#common-workflows-with-flyway)
+      - [Installation](#installation)
+      - [Setup](#setup)
+      - [Down Migrations](#down-migrations)
+      - [Run Flyway in Docker](#run-flyway-in-docker)
+      - [Troubleshoot](#troubleshoot)
+  - [Migrate Everything?](#migrate-everything)
+
+---
+
+# Docker for SQL Server
+
+## Volumes
+
+While a database can run inside a container, its data must exist outside the container’s lifecycle, such as in volumes. <br>
+Three things to persist in a SQL Server container:
+
+1. Data
+2. Logs (SQL Server Logs, not database transaction logs which are stored alongside the data)
+3. Secrets
+
+Each corresponds to a separate volume - a directory on the host mapped into the container.
+
+### Managing Permissions
+
+[SQL Server images](https://mcr.microsoft.com/en-us/catalog?search=sql%20server) run on Linux-based containers. This means that to persist data, the container’s Linux file system must be mapped to the host file system. It’s best to map a Linux container file system to a Linux host file system. On Windows, this requires using WSL, since mapping a Linux container directly to the Windows file system can lead to performance issues. Another option is to use [docker-managed volumes](https://www.youtube.com/watch?v=p2PH_YPCsis) which automatically stores data in a Linux-native filesystem. Regardless of the approach, SQL Server containers require that the container’s internal user (i.e., `mssql`) has write access to the mounted directories.
+
+SQL Server images on Linux do not run as root by default. Although Docker can mount volumes normally, the `mssql` user inside the container must have ownership of — or write access to — the mounted volumes. If it doesn’t, the SQL Server boot process cannot write system database files, causing the container to exit with an “Access is denied” error. Since the container runs as UID 10001, any mounted volume must either be **owned by that user** or have **write permissions granted** so that `mssql` can access it. While adjusting write permissions with `chmod` is technically sufficient, particularly for development or testing setups, ownership is safer and ensures that only the `mssql` user inside the container can write to the directories. Therefore, the recommended approach is to set `mssql` as the owner of the volume before starting the container.
+
+Create the volume directories at a host path of your choice: 
+```bash
+mkdir -p <host_sqlserver_volume_path>/{data,log,secrets}
+```
+
+You then have two options:
+
+1. Production-safe 
+   
+   Set ownership on that host path for the SQL Server container user (UID 10001) and restrict permissions to owner and group: 
+
+   ```bash
+   # Change owner and group to mssql
+   sudo chown -R 10001:10001 <host_sqlserver_volume_path>
+
+   # Restrict permissions to owner (mssql) and group (still mssql)
+   sudo chmod -R 770 <host_sqlserver_volume_path>
+   ```
+   * Only the mssql user inside the container can write
+   * Recommended for production and long-term use
+  
+2. Development-only
+   
+   Set ownership to `mssql` and grant full write permissions to everyone (revert before going live):
+
+    ```bash
+    sudo chown -R 10001:10001 <host_sqlserver_volume_path>
+    sudo chmod -R 777 <host_sqlserver_volume_path>
+    ```
+    * Any user on the host or process can write to the directories
+    * Works for quick experiments or testing, but not safe for production
+
+## Containerize SQL Server
+
+### Authentication
+
+There are two primary ways of authenticating SQL Server
+1. SQL Server Authentication: uses a SQL Server–specific username and password (e.g., `sa` or any user you create).
+2. Windows Authentication: uses your Windows (or Active Directory) credentials - no separate username/password needed in SQL Server itself.
+
+When running SQL Server in containers, SQL Server Authentication is recommended. Windows Authentication is mostly only practical if your container runs on Windows Server containers and is joined to a domain.
+
+### Run
+
+For SQL Server, `/var/opt/mssql/` is where database files live inside the container, so this is where we will be mounting volumes. Ensure the SA password meets SQL Server requirements — at least 8 characters including uppercase, lowercase, digits, and special characters — otherwise the container may exit with the error: Unable to set system administrator password.
+
+```bash
+docker pull mcr.microsoft.com/mssql/server:<tag>
+
+docker run -d \
+  --name <container_name> \
+  -e ACCEPT_EULA=Y \
+  -e MSSQL_SA_PASSWORD='<password>' \
+  -p <host_port>:1433 \
+  -v <host_sqlserver_volume_path>/data:/var/opt/mssql/data \
+  -v <host_sqlserver_volume_path>/log:/var/opt/mssql/log \
+  -v <host_sqlserver_volume_path>/secrets:/var/opt/mssql/secrets \
+  mcr.microsoft.com/mssql/server:<tag>
+
+# Confirm setup was successfull
+docker logs <container_name>
+```
+* `-e`: Passes [environment variables](https://learn.microsoft.com/en-us/sql/linux/sql-server-linux-configure-environment-variables?view=sql-server-ver17) into the container at runtime. SQL Server uses these to configure itself on startup, such as accepting the EULA (end-user license agreement) and setting the `sa` (system administrator) password. 
+* `-v`: Mounts a directory from the host into the container.
+* `-p <host_port>:1433`: exposes the container’s SQL Server to your host, allowing you to connect to it from SSMS or any SQL client on your machine. 
+
+### Run with --env-file
+
+You can create a simple `.env` file for Docker to store environment variables like the SA password, EULA acceptance, and any other configuration. Docker will automatically read all the variables from `.env` file and sensitive info (like SA password) will be kept out of your command history.
+
+1. Create `.env` file (e.g. `mssql.env`)
+   
+```bash
+touch mssql.env
+```
+
+2. Add environment variables inside
+   
+```bash
+# Accept SQL Server EULA
+ACCEPT_EULA=Y
+
+# SA password 
+MSSQL_SA_PASSWORD=<password>
+```
+Tip: Make sure there are no spaces around `=` and no quotes around the values.
+
+3. Use the `.env` file when running the container
+   
+```bash
+docker run -d \
+--name <container_name> \
+--env-file <path_to_env_file>/mssql.env \
+-p <host_port>:1433 \
+-v <host_sqlserver_volume_path>/data:/var/opt/mssql/data \
+-v <host_sqlserver_volume_path>/log:/var/opt/mssql/log \
+-v <host_sqlserver_volume_path>/secrets:/var/opt/mssql/secrets \
+mcr.microsoft.com/mssql/server:<tag>
+```
+
+## Querying
+
+Microsoft provides a command-line tool called `sqlcmd` for interacting with SQL Server databases, whether on the host or inside a running container. Note that not all SQL Server images include this tool by default. To use it inside a container, you may need to switch to the root user (since the container runs as `mssql` and lacks permission) and install the `mssql-tools` package.
+
+```bash
+# Run container as root
+docker exec -it --user root <container_name> bash
+
+# Install mssql-tools
+apt-get update
+apt-get install -y mssql-tools unixodbc-dev
+```
+
+Once `mssql-tools` is installed, `sqlcmd` will be available at `/opt/mssql-tools/bin/sqlcmd`, allowing us to access the database in several ways
+
+### Interactive Terminal
+
+```bash
+docker exec -it <container_name> \
+/opt/mssql-tools/bin/sqlcmd \
+-S <server> \
+-U <username> \
+-P '<password>' \
+-C
+```
+* `docker exec -it` → run interactively inside the container
+* `/opt/mssql-tools/bin/sqlcmd` → path to the tool inside SQL Server image
+* `-S` → server name or IP (for local Docker: `localhost,1433`)
+* `-U` → SQL login (`sa` by default)
+* `-P` → password
+* `-C` → Trusts the self-signed SSL certificate (for a local docker container without TLS, you can omit this).
+
+
+Then you can type queries, ending each with `GO`:
+```sql
+CREATE DATABASE TestDB;
+GO
+SELECT name FROM sys.databases;
+GO
+```
+* `GO` → Tells SQL Server to execute the command.
+
+When finished, exit the interactive session with:
+```sql
+QUIT
+```
+    
+### Command Line Queries
+
+```bash
+docker exec <container_name> \
+/opt/mssql-tools/bin/sqlcmd \
+-S <server> -U <username> -P '<password>' -C \
+-Q "<query_code>;"
+```
+* `-Q` → runs the query and exits
+
+### Script Files
+
+```bash
+docker exec <container_name> \
+/opt/mssql-tools/bin/sqlcmd \
+-S <server> -U <username> -P '<password>' -C \
+-i /path/to/script.sql
+```
+* `-i` → runs queries from `script.sql`
+
+The `-i /path/to/script.sql` expects the script to exist inside the container. If it’s on the host, you must mount the directory as a volume when starting the container.
+
+## Security
+
+### Admin User
+
+The `sa` user is a master key for SQL Server with unrestricted access. While convenient, it’s a major security risk: it has full system control, is a well-known attack target, and is frequently targeted by automated brute-force attempts. It's best to create a new admin user and disable `sa`.
+
+```bash
+# Run sqlcmd in interactive mode
+docker exec -it <container_name> \
+/opt/mssql-tools/bin/sqlcmd \
+-S <server> \
+-U <username> \
+-P '<password>' \
+
+# Create a new admin login
+CREATE LOGIN <admin_user_name>
+WITH PASSWORD = '<password>';
+GO
+
+# Grant sysadmin priviledges
+ALTER SERVER ROLE sysadmin 
+ADD MEMBER <admin_user_name>;
+GO
+
+# Ensure new admin works
+SELECT name FROM sys.sql_logins 
+WHERE name = '<admin_user_name>';
+GO
+
+# Disable sa
+ALTER LOGIN sa DISABLE;
+GO
+```
+
+## Database Recovery: WORK
+
+For data recovery, the most obvious solution is a backup, which preserves the actual data at a specific point in time and becomes relevant only once there is data worth protecting. You may think that backups are unecessary when using Docker volumes, but you often need to restore to a point in time, not just “whatever is in the volume right now".
+
+### Backups: WORK
+
+A backup is a point-in-time snapshot of the database created with SQL Server tools or scripts (`.bak` file). It doesn’t automatically update — it only captures the state when it was created. In Docker, *backups should persist* outside the container, in a volume (which is just a directory on the host mapped into the container). The goal is to ensure the backup survives container restarts, upgrades, or deletions.
+
+#### Create a Backup via SSMS (Within your Container): WORK
+
+Backups can be created using SSMS or the container’s SQL Server tools. The SSMS approach is:
+
+* Launch SQL Server Management Studio (using version 22 but should work with earlier versions)
+* Connect to Server 
+    - Server Name: `localhost,1433`
+    - Authentication: `SQL Server Authentication` 
+    - User Name: `sa` 
+    - Password: `<password>` 
+    - Trust Server Certificate: ✔️ 
+* Right click on your database (a database is required - you are creating a backup for it)
+    - Expand `Tasks` and choose `Back Up`. 
+    - This will open a new dialogue displaying a a Linux path for your backup: `/var/opt/mssql/data/<database_name>.bak`
+    - Click `OK` until done
+  
+#### Store Backup to a Volume: WORK
+
+After creating the backup file, we need to get it out of the container and into a volume. First, let’s verify that the backup exists.
+
+1. Start a bash session within your container: `docker exec -it <container_name> /bin/bash`
+2. Navigate to the directory where the backup file is stored: `cd /var/opt/mssql/data/`
+3. List files to view your `<database_name>.bak` file: `ls`
+
+Once confirmed, copy the backup to the host to ensure it persists outside the container:
+```bash
+docker cp <container_name>:/var/opt/mssql/data/<database_name>.bak <absolute_host_path>/<database_name>.bak
+```
+
+# Database Reproducibility
+
+Database reproducibility refers to the ability to reliably recreate a database environment — including its schema, data, and configuration — so that it behaves the same way across different systems, times, or stages of development. This is typically achieved using [migrations](https://en.wikipedia.org/wiki/Schema_migration). A database migration is a change to the structure of a relational database. You can think of it like a commit in Git, but for your database schema. Every migration records how the structure of your data evolves over time.
+
+* 🚫 The Wrong Way to Migrate
+
+    Making schema changes directly on a live database is risky. If you manually modify the production database — for example by running `ALTER TABLE` commands — those changes exist only in that database. There’s no reliable record of what changed, no easy way to apply the same changes to development or staging databases, and no clear way to undo them if something goes wrong.
+
+* ✅ The Right Way to Migrate
+
+    Instead, describe every schema change in a migration file: a small, explicit script that says how the database structure should change. These files are saved with your code and applied in order to each environment (development, staging, production). By doing this, the database schema evolves in a controlled, repeatable way. Everyone runs the same steps, the schema stays aligned with the code, and the full history of changes is preserved — much like version control, but for the database structure.
+
+**Why not just use Git?** 
+
+Git alone can’t manage a database’s state. It only tracks files, so it has no awareness of which schema changes have actually been applied. Migration tools, by contrast, aren’t meant to track SQL code itself - Git already does that. Their purpose is to track the database state: which schema changes (tables, columns, constraints, defaults, and so on) have been applied, in what order, and whether they can be rolled back. Git manages the files; migrations manage the database.
+
+Nevertheless, Git is key for migrations because it versions the migration files alongside the application code. When we create a migration file for a specific application version, Git commits it alongside the code. Pushing these files to a remote repository ensures the deployment process can access them, keeping the database schema in sync with the deployed code.
+
+## Designing Safe Migrations
+
+Our system should automatically run database migrations whenever we deploy new code (e.g., through a CI/CD pipeline). This ensures that the database schema is always in sync with the code. It also makes it easy to set up new databases in any environment:
+* If we need a fresh copy of the database for testing or staging, running all migrations in order will recreate the schema exactly as in production.
+* If we want to set up a local development environment, running the migrations will build the correct database structure without manually creating tables or columns.
+
+Good migrations are small, incremental and ideally reversible changes to a database. **A good migration considers two key things:**
+1. **The old**, currently running version of the code 
+2. **The new** version of the code that will run after the migration is complete
+
+### Multi-phase Deployment
+
+If you apply a database migration that doesn’t match the code currently running in production, the app may break. Similarly, if you deploy new code that expects a different database schema than what’s currently in place, the app can also fail. The solution to the schema-code mismatch problem is a multi-phase deployment:
+1. **Expand phase** – Apply changes that are safe with both old and new code (e.g., adding a new column without removing the old one).
+2. **Deploy new code** – Release the new version of the application while the database has been safely expanded, ensuring the schema supports both the old and new code during the migration.
+3. **Contract phase** – Once the new code is running everywhere, run a clean-up migration to remove or modify old structures that are no longer needed.
+
+**Updating existing columns** requires extra caution. Avoid directly renaming or modifying a column. Instead, do another multi-phase deployment:
+1. Create a new column
+2. Copy data from the old column into the new one
+3. Deploy code that uses the new column (while the old column still exists for the old, currently running version of the app to use).
+4. Recopy data from the old column to the new column to catch any changes made between the first copy and the deployment.
+5. Run a migration to remove the old column.
+
+**Last resort:** If multi-phase deployment isn’t feasible, schedule downtime so users are aware that the app will be temporarily unavailable while the changes are applied safely.
+
+### Reversible Migrations
+
+To manage migrations, we use a simple system based on **up** and **down** directions.
+* The **up** migration applies changes to move your schema forward.
+  
+    ```sql
+    -- Migrate up
+    ALTER TABLE transactions
+    ADD COLUMN transaction_type TEXT;
+    ```
+
+* The **down** migration rolls those changes back to the previous state. 
+  
+    ```sql
+    -- Migrate down
+    ALTER TABLE transactions
+    DROP COLUMN transaction_type;
+    ```
+
+## Migration Tools
+
+As we've seen in the [reversible migrations](#reversible-migrations) section, we create an 'up migration' to apply a change. If we later need to revert it, we create a separate 'down migration'. Each migration is written in its own file, essentially a script containing SQL code. A migration tool processes these files, applying or reverting the schema based on the command provided.
+
+| Tool    | Language(s)                  | Notes                                                                 |
+|---------|-----------------------------|----------------------------------------------------------------------|
+| [Flyway](https://github.com/flyway/flyway)  | Java (also language-agnostic) | Executes plain SQL scripts; cloud-ready; CI/CD-friendly |
+| [Alembic](https://alembic.sqlalchemy.org/en/latest/index.html) | Python                      | Designed for SQLAlchemy; supports migrations written in Python or SQL |
+| [Goose](https://pressly.github.io/goose/?utm_source=chatgpt.com)   | Go                          | Native Go tool; primarily SQL-based but also allows Go functions for migrations |
+
+### High-level Workflow
+
+*Each tool’s workflow varies - some don’t support down migrations, and rollbacks are handled differently - but the general procedure is:*
+
+1. Write migration files.
+   
+   * `001_add_columns_to_transactions.up.sql`
+   * `001_add_columns_to_transactions.down.sql`
+
+    The `.up.sql` file defines the changes to apply to the database, while the `.down.sql` file defines how to revert those changes.
+
+2. Apply them using a CLI:
+   
+    ```bash
+    migrate up
+    ```
+
+    This command tells the migration tool to:
+    * Look at all migration files in order (e.g. `001_*.up.sql`)
+    * Check its migration history table in the database
+    * Find which migrations have not been applied yet
+    * Execute the corresponding `.up.sql` files against the database, in order
+    * Record each successful migration in the history table so it won’t run again
+
+    In effect, this brings the database schema up to the latest version. If we were to `migrate down`, the procedure would essentially be the same, but in reverse.
+
+### Flyway
+
+Flyway executes migration files exactly once and in order. It works alongside any programming language — your program doesn’t need to communicate with Flyway directly. Flyway manages the database migrations, and your program simply connects to the already-migrated database.
+
+#### Common Workflows with Flyway
+
+* Run Flyway in CI/CD before starting the application
+* Run in Docker alongside the application (Flyway container + app container)
+* Run as a startup step (shell script → Flyway → application)
+
+#### Installation
+
+There are two main options for using Flyway:
+
+1. [Download flyway from Redgate](https://www.red-gate.com/products/flyway/community/download/) and install locally on your host
+2. Pull the [official Docker image](https://hub.docker.com/r/flyway/flyway) from Docker Hub: `flyway/flyway`
+
+#### Setup
+
+1. File naming
+
+    After writing our migration code, Flyway expects it to be saved as a `.sql` file and named in the following format: `V<version_number>__<script_name>.sql`
+
+    For example: `V1__create_users_table.sql`
+    * `V1` → version 1 (first change)
+    * `__` → double underscore separator
+    * rest → description (for humans)
+
+2. Project structure
+
+    Flyway's config file is placed in our project's root, and migration files are usually kept in a dedicated directory (often called `db`, `migrations`, or `sql`) 
+
+    ```bash
+    project/
+    ├── db/
+    │   ├── V1__create_users_table.sql
+    │   └── V2__add_email_to_users.sql
+    └── flyway.conf
+    ```
+
+3. Config
+
+    A typical Flyway configuration file (like `flyway.conf`) contains key-value pairs that tell Flyway *how to connect to the database* and *where to find migration files*. 
+
+    ```conf
+    # Database connection
+    flyway.url=jdbc:<DRIVER>://<YOUR_SERVER_HOST>:<YOUR_SERVER_PORT>;databaseName=<YOUR_DATABASE_NAME>
+    flyway.user=<YOUR_DB_USERNAME>
+    flyway.password=<YOUR_DB_PASSWORD>
+
+    # Where Flyway looks for migration files
+    flyway.locations=filesystem:<PATH_TO_YOUR_DB_FOLDER>
+
+    # Optional: manage a specific schema (dbo by default)
+    flyway.schemas=<YOUR_SCHEMA_NAME_OR_DBO>
+
+    # Optional: treats existing DB tables as baseline so migrations start tracking from now
+    flyway.baselineOnMigrate=<true_or_false>
+
+    # Optional: file naming convention (default is V<version>__<description>.sql)
+    # flyway.sqlMigrationPrefix=V
+    # flyway.sqlMigrationSeparator=__
+    # flyway.sqlMigrationSuffix=.sql
+    ```
+    <br>
+
+    For a project structure like the one outlined in point 2, an example of a `flyway.conf` file for SQL Server could be:
+
+    ```conf
+    flyway.url=jdbc:sqlserver://localhost:1433;databaseName=MyAppDB
+    flyway.user=sa
+    flyway.password=MySecretPassword
+    flyway.locations=filesystem:db
+    flyway.schemas=dbo
+    flyway.baselineOnMigrate=true
+    ```
+
+#### Down Migrations
+
+[Flyway's free edition](https://documentation.red-gate.com/flyway/deploying-database-changes-using-flyway/deployment-approaches-with-flyway/migrations-based-approach) is primarily forward-migration oriented. It does not have built-in undo migrations; you have to manually create them and apply them as normal migrations.
+
+```bash
+project/
+└─ db/
+   ├─ V1__create_users_table.sql
+   ├─ V2__add_email_column.sql
+   └─ V3__remove_email_column.sql   <-- our "down" migration
+```
+
+Essentially, “down” is just another forward migration moving the schema to a previous state. After running, Flyway applies V1, V2, then V3. V3 effectively rolls back the email column addition.
+
+#### Run Flyway in Docker
+
+Flyway in Docker needs access to your migration scripts so it can run them against the database. These should be on your host machine until baked into your image.
+
+To make these scripts available to the Flyway Docker container, you “mount” the host folder into the container using -v:
+```
+-v /full/path/on/host:/flyway/sql
+```
+
+Run Flyway, give it your migration files and config, apply migrations, then exit container
+
+```bash
+docker run --rm \
+  -v "$(pwd)/db:/flyway/db" \
+  -v "$(pwd)/flyway.conf:/flyway/conf/flyway.conf" \
+  flyway/flyway migrate
+```
+
+[Flyway CLI](https://documentation.red-gate.com/flyway/reference/usage/command-line)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### Troubleshoot
+
+Repair + Baseline Trick
+
+`flyway repair` Fixes Flyway’s metadata table if something went wrong. Then you can manually revert changes using SQL and let Flyway continue from the new baseline: `flyway baseline`
+
+
+
+
+
+
+## Migrate Everything?
+
+Migrations should include only SQL that changes the database’s structure or essential reference data—such as creating or altering tables, adding indexes or constraints, and inserting or updating baseline data your app depends on. Routine transactional operations, like modifying user or business data, as well as ad-hoc reporting or `SELECT` queries, do not belong in migrations. The rule of thumb is to migrate **schema and essential baseline data**, not everyday application queries.
+
+A good set of migrations should allow you to delete your database and recreate it from scratch. If you can’t do that, it’s a sign something important was missed.
+
+
+
+
+
