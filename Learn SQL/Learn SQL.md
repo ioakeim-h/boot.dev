@@ -2,8 +2,8 @@
 
 Choose your topic from the list below
 
-- [Docker for SQL Server](#docker-for-sql-server)
-  - [Volumes](#volumes)
+- [SQL Server in Docker](#sql-server-in-docker)
+  - [Volumes Required](#volumes-required)
     - [Managing Permissions](#managing-permissions)
   - [Containerize SQL Server](#containerize-sql-server)
     - [Authentication](#authentication)
@@ -15,11 +15,7 @@ Choose your topic from the list below
     - [Script Files](#script-files)
   - [Security](#security)
     - [Admin User](#admin-user)
-  - [Database Recovery: WORK](#database-recovery-work)
-    - [Backups: WORK](#backups-work)
-      - [Create a Backup via SSMS (Within your Container): WORK](#create-a-backup-via-ssms-within-your-container-work)
-      - [Store Backup to a Volume: WORK](#store-backup-to-a-volume-work)
-- [Database Reproducibility](#database-reproducibility)
+- [Migrations: Database Reproducibility](#migrations-database-reproducibility)
   - [Designing Safe Migrations](#designing-safe-migrations)
     - [Multi-phase Deployment](#multi-phase-deployment)
     - [Reversible Migrations](#reversible-migrations)
@@ -30,9 +26,13 @@ Choose your topic from the list below
       - [Installation](#installation)
       - [Setup](#setup)
       - [Down Migrations](#down-migrations)
-      - [Run Flyway in Docker](#run-flyway-in-docker)
-      - [Troubleshoot](#troubleshoot)
+      - [Flyway with SQL Server and Docker](#flyway-with-sql-server-and-docker)
+      - [ERROR: Validate failed](#error-validate-failed)
   - [Migrate Everything?](#migrate-everything)
+- [Backups: Database Recovery](#backups-database-recovery)
+  - [Backups for Dockerized SQL Server](#backups-for-dockerized-sql-server)
+    - [Create a Backup](#create-a-backup)
+    - [Store Backup to a Volume](#store-backup-to-a-volume)
 
 ---
 
@@ -391,7 +391,7 @@ There are two main options for using Flyway:
 
     ```bash
     project/
-    ├── db/
+    ├── migrations/
     │   ├── V1__create_users_table.sql
     │   └── V2__add_email_to_users.sql
     └── flyway.conf
@@ -408,7 +408,7 @@ There are two main options for using Flyway:
     flyway.password=<YOUR_DB_PASSWORD>
 
     # Where Flyway looks for migration files
-    flyway.locations=filesystem:<PATH_TO_YOUR_DB_FOLDER>
+    flyway.locations=filesystem:<PATH_TO_CONTAINER_MIGRATIONS_FOLDER>
 
     # Optional: manage a specific schema (dbo by default)
     flyway.schemas=<YOUR_SCHEMA_NAME_OR_DBO>
@@ -421,18 +421,6 @@ There are two main options for using Flyway:
     # flyway.sqlMigrationSeparator=__
     # flyway.sqlMigrationSuffix=.sql
     ```
-    <br>
-
-    For a project structure like the one outlined in point 2, an example of a `flyway.conf` file for SQL Server could be:
-
-    ```conf
-    flyway.url=jdbc:sqlserver://localhost:1433;databaseName=MyAppDB
-    flyway.user=sa
-    flyway.password=MySecretPassword
-    flyway.locations=filesystem:db
-    flyway.schemas=dbo
-    flyway.baselineOnMigrate=true
-    ```
 
 #### Down Migrations
 
@@ -440,7 +428,7 @@ There are two main options for using Flyway:
 
 ```bash
 project/
-└─ db/
+└─ migrations/
    ├─ V1__create_users_table.sql
    ├─ V2__add_email_column.sql
    └─ V3__remove_email_column.sql   <-- our "down" migration
@@ -448,59 +436,73 @@ project/
 
 Essentially, “down” is just another forward migration moving the schema to a previous state. After running, Flyway applies V1, V2, then V3. V3 effectively rolls back the email column addition.
 
-#### Run Flyway in Docker: WORK
+#### Flyway with SQL Server and Docker
 
-Flyway in Docker needs access to your migration scripts so it can run them against the database. These should be on your host machine until baked into your image.
+Working with Flyway and SQL Server usually involves **two separate containers**
+1. The SQL Server container is **stateful** - a long-running container that persists database data by writing to a volume
+2. The Flyway container is **stateless** — a temporary container that reads migration scripts from a mounted volume, applies them, and then exits
 
-To make these scripts available to the Flyway Docker container, you “mount” the host folder into the container using -v:
-```
--v /full/path/on/host:/flyway/sql
-```
+You don’t bake migrations into the SQL Server container; instead, Flyway connects to the running SQL Server container via a JDBC connection to apply them. 
 
-Run Flyway, give it your migration files and config, apply migrations, then exit container
+![flywaySQLDiagram](/images/flywaySQL.png)
 
-```bash
-docker run --rm \
-  -v "$(pwd)/db:/flyway/db" \
-  -v "$(pwd)/flyway.conf:/flyway/conf/flyway.conf" \
-  flyway/flyway migrate
-```
+Assuming a *SQL Server container is already running*, you run Flyway as a one-off container that connects to it:
 
-[Flyway CLI](https://documentation.red-gate.com/flyway/reference/usage/command-line)
+1. **Create a `flyway.conf` file on your host**
+   
+    ```conf
+    flyway.url=jdbc:sqlserver://<host>:1433;databaseName=<YOUR_DATABASE_NAME>
+    flyway.user=<YOUR_DB_USERNAME>
+    flyway.password=<YOUR_DB_PASSWORD>
+    flyway.locations=filesystem:/flyway/sql
 
+    # Notes for `<host>`:
+    # - Use `host.docker.internal` if connecting via the host (host SQL Server or container exposed to host)  
+    # - Use the container name if connecting container-to-container on a custom Docker network
+    ```
 
+2. **Create a volume for migration scripts**
+   
+   ```bash
+   mkdir migrations
+   ```
 
+3. **Run Flyway container and mount both the config file and the migrations**
 
+    **Option A:** Run the container each time you want to migrate
 
+    ```bash
+    docker run --rm \
+      -v <migrations_path>:/flyway/sql \
+      -v <path_to_flyway.conf>:/flyway/conf/flyway.conf \
+      flyway/flyway migrate
+    ```
 
+    **Option B:** Save as `migrate.sh` and just run `./migrate.sh` whenever you need to migrate
+    ```bash
+    #!/bin/bash
+    docker run --rm \
+      -v <migrations_path>:/flyway/sql \
+      -v <path_to_flyway.conf>:/flyway/conf/flyway.conf \
+      flyway/flyway migrate
+      ```
 
+    **Option C:** [Use Docker Compose](/sqlserver-docker-flyway.md)
 
+***Note:** When coordinating multiple containers, it's best to use something like Docker Compose*
 
+#### ERROR: Validate failed
 
+This error happens when Flyway detects that a migration you already applied has changed since it was first run. If you modify the migration script after it has already been applied, Flyway sees that the applied migration doesn’t match the local file and refuses to continue because this could break the database. 
 
+To resolve:
 
+1. **Revert the migration file** (ideally using version control) so it matches what was applied.
+2. If the metadata table is out of sync or you intentionally want to accept the changes, run: `flyway repair`
+  
+    After repair, you can set a new baseline with: `flyway baseline`. This lets Flyway continue safely from the updated baseline without re-running or breaking existing migrations.
 
-
-
-
-
-
-
-
-
-
-
-
-
-#### Troubleshoot: WORK
-
-Repair + Baseline Trick
-
-`flyway repair` Fixes Flyway’s metadata table if something went wrong. Then you can manually revert changes using SQL and let Flyway continue from the new baseline: `flyway baseline`
-
-
-
-
+**Note:** `repair` only works safely in development. It updates Flyway’s schema history table to match the current files without changing the database, but should **never** be used in production, where migration history must remain immutable.
 
 
 ## Migrate Everything?
@@ -508,10 +510,6 @@ Repair + Baseline Trick
 Migrations should include only SQL that changes the database’s structure or essential reference data—such as creating or altering tables, adding indexes or constraints, and inserting or updating baseline data your app depends on. Routine transactional operations, like modifying user or business data, as well as ad-hoc reporting or `SELECT` queries, do not belong in migrations. The rule of thumb is to migrate **schema and essential baseline data**, not everyday application queries.
 
 A good set of migrations should allow you to delete your database and recreate it from scratch. If you can’t do that, it’s a sign something important was missed.
-
-
-
-
 
 # Backups: Database Recovery
 
@@ -570,14 +568,3 @@ sudo docker cp <container_name>:/var/opt/mssql/data/<db_name>.bak <host_path>/<d
 
 
 
-docker run -d \
-  --name sql_container \
-  -e ACCEPT_EULA=Y \
-  -e MSSQL_SA_PASSWORD='GREX7skas4!' \
-  -p 1433:1433 \
-  -v /home/ihadjimpalasis/DockerSQL/SqlVolume/data:/var/opt/mssql/data \
-  -v /home/ihadjimpalasis/DockerSQL/SqlVolume/log:/var/opt/mssql/log \
-  -v /home/ihadjimpalasis/DockerSQL/SqlVolume/secrets:/var/opt/mssql/secrets \
-  mcr.microsoft.com/mssql/server:2025-latest
-
-  docker exec -it sql_container /opt/mssql-tools/bin/sqlcmd -S localhost,1433 -U akis -P 'GREX7skas4!'  
