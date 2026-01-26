@@ -444,7 +444,7 @@ Working with Flyway and SQL Server usually involves **two separate containers**
 
 You don’t bake migrations into the SQL Server container; instead, Flyway connects to the running SQL Server container via a JDBC connection to apply them. 
 
-![flywaySQLDiagram](/images/flywaySQL.png)
+![flywaySQLDiagram](images/flywaySQL.png)
 
 Assuming a *SQL Server container is already running*, you run Flyway as a one-off container that connects to it:
 
