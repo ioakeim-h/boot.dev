@@ -36,9 +36,9 @@ Choose your topic from the list below
 
 ---
 
-# Docker for SQL Server
+# SQL Server in Docker
 
-## Volumes
+## Volumes Required
 
 While a database can run inside a container, its data must exist outside the container’s lifecycle, such as in volumes. <br>
 Three things to persist in a SQL Server container:
@@ -258,44 +258,7 @@ ALTER LOGIN sa DISABLE;
 GO
 ```
 
-## Database Recovery: WORK
-
-For data recovery, the most obvious solution is a backup, which preserves the actual data at a specific point in time and becomes relevant only once there is data worth protecting. You may think that backups are unecessary when using Docker volumes, but you often need to restore to a point in time, not just “whatever is in the volume right now".
-
-### Backups: WORK
-
-A backup is a point-in-time snapshot of the database created with SQL Server tools or scripts (`.bak` file). It doesn’t automatically update — it only captures the state when it was created. In Docker, *backups should persist* outside the container, in a volume (which is just a directory on the host mapped into the container). The goal is to ensure the backup survives container restarts, upgrades, or deletions.
-
-#### Create a Backup via SSMS (Within your Container): WORK
-
-Backups can be created using SSMS or the container’s SQL Server tools. The SSMS approach is:
-
-* Launch SQL Server Management Studio (using version 22 but should work with earlier versions)
-* Connect to Server 
-    - Server Name: `localhost,1433`
-    - Authentication: `SQL Server Authentication` 
-    - User Name: `sa` 
-    - Password: `<password>` 
-    - Trust Server Certificate: ✔️ 
-* Right click on your database (a database is required - you are creating a backup for it)
-    - Expand `Tasks` and choose `Back Up`. 
-    - This will open a new dialogue displaying a a Linux path for your backup: `/var/opt/mssql/data/<database_name>.bak`
-    - Click `OK` until done
-  
-#### Store Backup to a Volume: WORK
-
-After creating the backup file, we need to get it out of the container and into a volume. First, let’s verify that the backup exists.
-
-1. Start a bash session within your container: `docker exec -it <container_name> /bin/bash`
-2. Navigate to the directory where the backup file is stored: `cd /var/opt/mssql/data/`
-3. List files to view your `<database_name>.bak` file: `ls`
-
-Once confirmed, copy the backup to the host to ensure it persists outside the container:
-```bash
-docker cp <container_name>:/var/opt/mssql/data/<database_name>.bak <absolute_host_path>/<database_name>.bak
-```
-
-# Database Reproducibility
+# Migrations: Database Reproducibility
 
 Database reproducibility refers to the ability to reliably recreate a database environment — including its schema, data, and configuration — so that it behaves the same way across different systems, times, or stages of development. This is typically achieved using [migrations](https://en.wikipedia.org/wiki/Schema_migration). A database migration is a change to the structure of a relational database. You can think of it like a commit in Git, but for your database schema. Every migration records how the structure of your data evolves over time.
 
@@ -408,8 +371,8 @@ Flyway executes migration files exactly once and in order. It works alongside an
 
 There are two main options for using Flyway:
 
-1. [Download flyway from Redgate](https://www.red-gate.com/products/flyway/community/download/) and install locally on your host
-2. Pull the [official Docker image](https://hub.docker.com/r/flyway/flyway) from Docker Hub: `flyway/flyway`
+1. Local: [Download flyway from Redgate](https://www.red-gate.com/products/flyway/community/download/) and install on your host
+2. Docker: Pull the `flyway/flyway` [official Docker image](https://hub.docker.com/r/flyway/flyway) from Docker Hub 
 
 #### Setup
 
@@ -485,7 +448,7 @@ project/
 
 Essentially, “down” is just another forward migration moving the schema to a previous state. After running, Flyway applies V1, V2, then V3. V3 effectively rolls back the email column addition.
 
-#### Run Flyway in Docker
+#### Run Flyway in Docker: WORK
 
 Flyway in Docker needs access to your migration scripts so it can run them against the database. These should be on your host machine until baked into your image.
 
@@ -529,7 +492,7 @@ docker run --rm \
 
 
 
-#### Troubleshoot
+#### Troubleshoot: WORK
 
 Repair + Baseline Trick
 
@@ -550,3 +513,71 @@ A good set of migrations should allow you to delete your database and recreate i
 
 
 
+# Backups: Database Recovery
+
+For data recovery, the most obvious solution is a backup, which preserves the actual data at a specific point in time and becomes relevant only once there is data worth protecting. When using Docker volumes, it may be tempting to think that backups are unnecessary, but you often need to restore to a point in time, not just “whatever is in the volume right now". You may then assume that going back to a previous state can be achieved using down migrations, but migrations describe structure, not data history, and therefore cannot reliably restore lost or corrupted data.
+
+The goal of a backup is to be able to restore data to a known good state when something goes wrong.
+
+## Backups for Dockerized SQL Server
+
+A backup is a point-in-time snapshot of the database created with SQL Server tools or scripts (`.bak` file). It doesn’t automatically update — it only captures the state when it was created. In Docker, *backups should persist* outside the container, in a volume (which is just a directory on the host mapped into the container). The goal is to ensure the backup survives container restarts, upgrades, or deletions.
+
+### Create a Backup 
+
+Backups can be created using the container’s SQL Server tools .  
+
+```bash
+# Generates a .bak file for your backup
+docker exec <container_name> /opt/mssql-tools/bin/sqlcmd \
+-S <server> -U <username> -P "<password>" -C \
+-Q "BACKUP DATABASE [<db_name>] TO DISK = N'/var/opt/mssql/data/<db_name>.bak' WITH INIT, FORMAT;"
+```
+* `TO DISK` specifies that the backup should be written to a file on disk.
+  * Alternative: `TO TAPE` (for tape backups) or `TO URL` (for Azure blob storage).
+* `N'/var/opt/mssql/data/<db_name>.bak'` specified the path and filename of the backup file.
+  * `N'...'` → prefix `N` means it’s a Unicode string, which is a SQL Server convention (important if your path contains non-ASCII characters).
+  * In Docker Linux containers, `/var/opt/mssql/data/` is the default data directory inside the container.
+* `WITH INIT` initializes the backup file, overwriting any existing content.
+  * Without `INIT`, SQL Server would append the new backup to the file (creating a backup set) instead of replacing it.
+* `WITH FORMAT` formats the backup media, creating a new media header.
+  * This is required if you want to completely overwrite an existing file and start fresh.
+  * Often used together with `INIT` for a clean, standalone backup.
+
+
+### Store Backup to a Volume
+
+After creating the backup file, we need to get it out of the container. If you modified directory permissions during [volume setup](#managing-permissions), you may need to use `sudo` to copy the backup into the volume:
+
+```bash
+# Copy the backup out of the container and into the volume
+sudo docker cp <container_name>:/var/opt/mssql/data/<db_name>.bak <host_path>/<db_name>.bak
+```
+
+*Note: The **safest approach** is to store the backup both in a volume and on external storage.*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+docker run -d \
+  --name sql_container \
+  -e ACCEPT_EULA=Y \
+  -e MSSQL_SA_PASSWORD='GREX7skas4!' \
+  -p 1433:1433 \
+  -v /home/ihadjimpalasis/DockerSQL/SqlVolume/data:/var/opt/mssql/data \
+  -v /home/ihadjimpalasis/DockerSQL/SqlVolume/log:/var/opt/mssql/log \
+  -v /home/ihadjimpalasis/DockerSQL/SqlVolume/secrets:/var/opt/mssql/secrets \
+  mcr.microsoft.com/mssql/server:2025-latest
+
+  docker exec -it sql_container /opt/mssql-tools/bin/sqlcmd -S localhost,1433 -U akis -P 'GREX7skas4!'  
