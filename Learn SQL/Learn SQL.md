@@ -487,7 +487,7 @@ Assuming a *SQL Server container is already running*, you run Flyway as a one-of
       flyway/flyway migrate
       ```
 
-    **Option C:** [Use Docker Compose](/sqlserver-docker-flyway.md)
+    **Option C:** [Use Docker Compose](sqlserver-docker-flyway.md)
 
 ***Note:** When coordinating multiple containers, it's best to use something like Docker Compose*
 

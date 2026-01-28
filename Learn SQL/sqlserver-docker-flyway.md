@@ -2,6 +2,22 @@
 
 Covers the end-to-end process of managing a SQL Server database in a containerized environment with migrations. This is a support document for my [SQL Guide](/Learn%20SQL.md) (check it out).
 
+project/
+├─ compose.yaml
+├─ .env
+├─ flyway.conf        
+├─ db/
+│  └─ migrations/
+│      ├─ V1__create_table.sql
+│      └─ V2__insert_data.sql
+├─ sqlserver/
+│  ├─ data/
+│  ├─ log/
+│  └─ secrets/
+
+
+
+
 - Create a network for SQL Server and Flyway to communicate
 - Baseline database schema for Flyway
 - "Schema [dbo] is up to date. No migration necessary." the power of Flyway
@@ -17,24 +33,10 @@ Docker compose
 
 
 
-docker pull mcr.microsoft.com/mssql/server:<tag>
-docker pull flyway/flyway:<tag>
+Steps:
 
-docker run -d \
-  --name <container_name> \
-  -e ACCEPT_EULA=Y \
-  -e MSSQL_SA_PASSWORD='<password>' \
-  -p <host_port>:1433 \
-  -v <host_sqlserver_volume_path>/data:/var/opt/mssql/data \
-  -v <host_sqlserver_volume_path>/log:/var/opt/mssql/log \
-  -v <host_sqlserver_volume_path>/secrets:/var/opt/mssql/secrets \
-  mcr.microsoft.com/mssql/server:<tag>
+docker-compose build sqlserver
 
+need to build first because our SQL Server service is using a custom Dockerfile
 
-
-
-docker run --rm \
-  -v /home/ihadjimpalasis/DockerSQL/MigrationsVolume:/flyway/sql \
-  -v /home/ihadjimpalasis/DockerSQL/SqlVolume/flyway.conf:/flyway/conf/flyway.conf \
-  flyway/flyway migrate
-
+docker compose up
