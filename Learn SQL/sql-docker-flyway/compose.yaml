@@ -1,0 +1,36 @@
+networks:
+  appnet:
+    driver: bridge
+    
+services:
+  sqlserver:
+    build: .
+    container_name: sqlserver
+    networks:
+      - appnet
+    ports:
+      - "1433:1433"
+    volumes:
+      - ./sqlserver/data:/var/opt/mssql/data
+      - ./sqlserver/log:/var/opt/mssql/log
+      - ./sqlserver/secrets:/var/opt/mssql/secrets
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "${MSSQL_SA_PASSWORD}", "-Q", "SELECT 1"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+
+  flyway:
+    image: flyway/flyway:11
+    container_name: flyway
+    networks:
+      - appnet
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/flyway/sql
+      - ./flyway.conf:/flyway/conf/flyway.conf
+    command: migrate
+
+
