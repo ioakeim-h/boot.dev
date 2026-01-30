@@ -33,6 +33,12 @@ Choose your topic from the list below
   - [Backups for Dockerized SQL Server](#backups-for-dockerized-sql-server)
     - [Create a Backup](#create-a-backup)
     - [Store Backup to a Volume](#store-backup-to-a-volume)
+- [Relational Database Design](#relational-database-design)
+  - [Constraints](#constraints)
+    - [Primary \& Foreign Keys](#primary--foreign-keys)
+  - [Schema](#schema)
+  - [Data Modelling](#data-modelling)
+  - [Data Warehousing](#data-warehousing)
 
 ---
 
@@ -555,16 +561,120 @@ sudo docker cp <container_name>:/var/opt/mssql/data/<db_name>.bak <host_path>/<d
 *Note: The **safest approach** is to store the backup both in a volume and on external storage.*
 
 
+# Relational Database Design
+
+## Constraints 
+
+Constraints are rules applied to a table’s columns to enforce data integrity. They ensure that data meets specific conditions and prevent invalid entries. If these rules are violated, an error is raised, and the data is not entered into the database.
+
+Constraints can be defined when **creating a table**
+
+
+```sql
+CREATE TABLE employees (
+    id INT PRIMARY KEY,
+    -- PRIMARY KEY uniquely identifies each employee
+
+    name NVARCHAR(100) UNIQUE,
+    -- UNIQUE ensures no two employees have the same name
+
+    title NVARCHAR(100) NOT NULL,
+    -- NOT NULL ensures the title cannot be empty
+
+    salary DECIMAL,
+    country NVARCHAR(100)
+);
+```
+
+or added later by **altering an existing table**. In SQL Server, any constraint added with `ALTER TABLE` must have a name, and when adding a `DEFAULT`, the target column must also be specified
+
+```sql
+ALTER TABLE employees
+ADD CONSTRAINT check_salary CHECK (salary >= 0);
+-- CHECK ensures salary is non-negative
+
+ALTER TABLE employees
+ADD CONSTRAINT df_country DEFAULT 'Cyprus' FOR country;
+-- DEFAULT provides a default value if none is given
+```
+
+**Note:** A single column can have **multiple constraints** applied at the same time (e.g., `NOT NULL`, `UNIQUE`, `CHECK`) either inline during `CREATE TABLE` or via separate `ALTER TABLE` statements.
+
+
+### Primary & Foreign Keys
+
+A key defines and protects relationships between tables. 
+
+A `PRIMARY KEY` is a special column that uniquely identifies each record within a table. Each table can have **only one primary key**. It’s very common to name this column `id`, and it is almost always the primary key for the table. No two rows can share the same `id`. By definition, a primary key is always `NOT NULL`.
+
+`FOREIGN KEY`s are what make relational databases relational. A foreign key is a column in one table that references the primary key of another table. This means that that *any value inserted into the foreign key column must already exist in the referenced column*. What's more, a foreign key does not automatically enforce `NOT NULL`, and it does not always have to be non-null. For example, a `books` table might allow books with unknown authors — in the example below, author_id can be `NULL`.
+
+```sql
+CREATE TABLE authors (
+    id INT PRIMARY KEY
+    -- PRIMARY KEY
+);
+
+CREATE TABLE books (
+    id INT PRIMARY KEY,
+    -- PRIMARY KEY for books
+
+    author_id INT,
+    CONSTRAINT fk_authors FOREIGN KEY (author_id) REFERENCES authors(id)
+    -- FOREIGN KEY referencing authors
+);
+```
+
+**Note:** In SQL Server, foreign keys can also be added after table creation using `ALTER TABLE`.
+
+## Schema
+
+A database's schema describes how data is organized within it. Data types, table names, field names, constraints, and the relationships between all of those entities are part of a database's schema. When designing a database schema there typically isn't a "correct" solution. We do our best to choose a sane set of tables, fields, constraints, etc that will accomplish our project's goals. Like many things in programming, different schema designs come with different tradeoffs.
+
+A data engineer should understand the logic, purpose, and consequences of schema design, and know enough SQL to implement it efficiently
+
+
+Difference between transactional (OLTP) vs analytical (OLAP) schemas
+- OLTP: Focus on normalization, keys, constraints
+- OLAP / Data warehouse: Focus on star/snowflake schemas, denormalization for reporting, and aggregation
+
+basics: https://www.ibm.com/think/topics/database-schema
+Star vs snowflake made easy: https://medium.com/@priyaskulkarni/data-modeling-for-data-warehousing-a-comprehensive-guide-with-examples-53af18ac55b9
+
+star: denormalized
+snowflake: normalized
 
 
 
+## Data Modelling
 
+Data modelling occurs across **three stages**
 
+1. Conceptual = big picture
+   
+    ```
+    Conceptual schemas offer a big-picture view of what the system will contain, how it will be organized, and which business rules are involved. 
+    Conceptual models are usually created as part of the process of gathering initial project requirements.
+    ```
 
+2. Logical = detailed design
+   
+    ```
+    Logical database schemas are less abstract, compared to conceptual schemas. 
+    They clearly define schema objects with information, such as table names, field names, entity relationships, and integrity constraints — i.e. any rules that govern the database. 
+    However, they do not typically include any technical requirements.
+    ```
 
+3. Physical = actual implementation
 
+    ```
+    Physical database schemas provide the technical information that the logical database schema type lacks in addition to the contextual information, such as table names, field names, entity relationships, et cetera. 
+    That is, it also includes the syntax that will be used to create these data structures within disk storage.
+    ```
 
+The entire idea is that the physical database is built after the blueprint is validated, so you don’t “dig into construction” before knowing what works. By modelling first, you spot design flaws early, decide on normalization vs denormalization, plan for query patterns and reporting needs, and avoid costly changes later which are 99.99% guaranteed.
 
+## Data Warehousing
 
-
-
+- Data modeling = planning the structure (OLTP or OLAP)
+- Data warehousing = implementing and optimizing that structure for analytics (OLAP)
