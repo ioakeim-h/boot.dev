@@ -33,6 +33,16 @@ Choose your topic from the list below
   - [Backups for Dockerized SQL Server](#backups-for-dockerized-sql-server)
     - [Create a Backup](#create-a-backup)
     - [Store Backup to a Volume](#store-backup-to-a-volume)
+- [Constraints](#constraints)
+  - [Primary \& Foreign Keys](#primary--foreign-keys)
+- [Table Relationships](#table-relationships)
+- [Normalization](#normalization)
+  - [1NF](#1nf)
+  - [2NF](#2nf)
+  - [3NF](#3nf)
+  - [BCNF](#bcnf)
+  - [Denormalization](#denormalization)
+- [ACID Transactions (OLTP)](#acid-transactions-oltp)
 - [Data Modelling](#data-modelling)
   - [Conceptual](#conceptual)
     - [OLTP](#oltp)
@@ -43,11 +53,7 @@ Choose your topic from the list below
     - [OLAP Workflow](#olap-workflow)
       - [The Holy... Grain](#the-holy-grain)
     - [Visualize (Low-Level)](#visualize-low-level)
-  - [Physical](#physical)
-    - [Constraints](#constraints)
-      - [Primary \& Foreign Keys](#primary--foreign-keys)
-    - [Normalization (OLTP)](#normalization-oltp)
-    - [ACID Transactions (OLTP)](#acid-transactions-oltp)
+    - [Documentation](#documentation)
 
 ---
 
@@ -569,6 +575,417 @@ sudo docker cp <container_name>:/var/opt/mssql/data/<db_name>.bak <host_path>/<d
 
 *Note: The **safest approach** is to store the backup both in a volume and on external storage.*
 
+
+
+
+
+
+
+
+# Constraints 
+
+Constraints are rules applied to a table’s columns to enforce data integrity. They ensure that data meets specific conditions and prevent invalid entries. If these rules are violated, an error is raised, and the data is not entered into the database.
+
+Constraints can be defined when **creating a table**
+
+```sql
+CREATE TABLE employees (
+    id INT PRIMARY KEY,
+    -- PRIMARY KEY uniquely identifies each employee
+
+    name NVARCHAR(100) UNIQUE,
+    -- UNIQUE ensures no two employees have the same name
+
+    title NVARCHAR(100) NOT NULL,
+    -- NOT NULL ensures the title cannot be empty
+
+    salary DECIMAL,
+    country NVARCHAR(100)
+);
+```
+
+or added later by **altering an existing table**. In SQL Server, any constraint added with `ALTER TABLE` must have a name, and when adding a `DEFAULT`, the target column must also be specified
+
+```sql
+ALTER TABLE employees
+ADD CONSTRAINT check_salary CHECK (salary >= 0);
+-- CHECK ensures salary is non-negative
+
+ALTER TABLE employees
+ADD CONSTRAINT df_country DEFAULT 'Cyprus' FOR country;
+-- DEFAULT provides a default value if none is given
+```
+
+**Note:** A single column can have **multiple constraints** applied at the same time (e.g., `NOT NULL`, `UNIQUE`, `CHECK`) either inline during `CREATE TABLE` or via separate `ALTER TABLE` statements.
+
+## Primary & Foreign Keys
+
+A key defines and protects relationships between tables. 
+
+A `PRIMARY KEY` is a special column that uniquely identifies each record within a table. Each table can have **only one primary key**. It’s very common to name this column `id`, and it is almost always the primary key for the table. No two rows can share the same `id`. By definition, a primary key is always `NOT NULL`.
+
+`FOREIGN KEY`s are what make relational databases relational. A foreign key is a column in one table that references the primary key of another table. This means that that *any value inserted into the foreign key column must already exist in the referenced column*. What's more, a foreign key does not automatically enforce `NOT NULL`, and it does not always have to be non-null. For example, a `books` table might allow books with unknown authors — in the example below, author_id can be `NULL`.
+
+```sql
+CREATE TABLE authors (
+    id INT PRIMARY KEY
+    -- PRIMARY KEY
+);
+
+CREATE TABLE books (
+    id INT PRIMARY KEY,
+    -- PRIMARY KEY for books
+
+    author_id INT,
+    CONSTRAINT fk_authors FOREIGN KEY (author_id) REFERENCES authors(id)
+    -- FOREIGN KEY referencing authors
+);
+```
+
+**Note:** In SQL Server, foreign keys can also be added after table creation using `ALTER TABLE`.
+
+
+
+
+
+
+
+
+
+
+
+# Table Relationships
+
+A relationship between tables assumes that one of these tables has a foreign key that references the primary key of another table. SQL describes relationships between tables in three ways:
+
+| Relationship | Definition | Example |
+|-------------------|---------------------------|---------|
+| **One‑to‑One** | A one‑to‑one relationship means each record in one table matches with at most one record in another table. | Each **user** has exactly one **password**. |
+| **One‑to‑Many** | A one‑to‑many relationship means one record in a table can be linked to many records in another table, but each of those records links back to only one parent. | One **customer** can place many **orders**, and each order belongs to one customer. |
+| **Many‑to‑Many** | A many‑to‑many relationship means records in each table can be linked to multiple records in the other. | **Students** can enroll in many **courses**, and each course can have many students. |
+
+
+- A one‑to‑one relationship often ends up represented simply as extra columns stored on the same row of a single table. For example, if each user has exactly one password, that password can be stored as an extra column (`password`) in the `Users` table rather than in a separate table.
+- A one-to-many relationship is made explicit by adding a foreign key to the "many" side of the relationship. For example, in a system where one customer can place many orders, the `Orders` table includes a `customer_id` foreign key that points back to the `Customers` table.
+  
+  ```sql
+  CREATE TABLE Customers (
+      id INT IDENTITY PRIMARY KEY,
+      name NVARCHAR(100) NOT NULL
+  );
+
+  CREATE TABLE Orders (
+      id INT IDENTITY PRIMARY KEY,
+      order_date DATE NOT NULL,
+      customer_id INT NOT NULL, -- FK links Orders with Customers
+      CONSTRAINT fk_orders_customer
+          FOREIGN KEY (customer_id) REFERENCES Customers(id)
+  );
+  ```
+
+- Many‑to‑many relationships occur via junction (joining) tables. For example, to represent the relationship between students and courses, we create a joining table called `student_courses` that stores the primary keys from both the `Students` and `Courses` tables. Then, when we want to check whether a student is enrolled in a specific course, we simply look in the joining table to see if the ids share a row.
+
+  ```sql
+  CREATE TABLE Students (
+      id INT IDENTITY PRIMARY KEY,
+      name NVARCHAR(100) NOT NULL
+  );
+
+  CREATE TABLE Courses (
+      id INT IDENTITY PRIMARY KEY,
+      title NVARCHAR(100) NOT NULL
+  );
+
+  -- Joining table
+  CREATE TABLE student_courses (
+      student_id INT NOT NULL,
+      course_id INT NOT NULL,
+
+      -- Composite primary key ensures each (student, course) pair appears only once
+      CONSTRAINT pk_student_courses PRIMARY KEY (student_id, course_id),
+
+      CONSTRAINT fk_student_courses_student
+          FOREIGN KEY (student_id) REFERENCES Students(id),
+      CONSTRAINT fk_student_courses_course
+          FOREIGN KEY (course_id) REFERENCES Courses(id)
+  );
+  ```
+
+
+# Normalization 
+
+Database normalization is a method for structuring your database schema in a way that improves data integrity and reduces redundancy. Put simply, normalization is about shaping your tables so they contain less duplicate data and more consistent, reliable data. The goal is to store data in its simplest form without unnecessary copies, because duplicate data can lead to bugs. For example, a value might be updated in one table but not in another, resulting in an invalid database state — leaving uncertainty about which value is correct.
+
+The more normalized a database is, the less duplicate data it contains. Normalization is commonly described through a series of normal forms, each introducing additional rules and building on the previous one:
+1. First Normal Form (1NF)
+2. Second Normal Form (2NF)
+3. Third Normal Form (3NF)
+4. Boyce–Codd Normal Form (BCNF) 
+   
+<br>
+
+![normal forms](images/normal_forms.png)
+
+## 1NF
+
+First Normal Form has two rules:
+
+1. **Every row must have a unique primary key**
+2. **There can be no nested values**
+
+The first rule fixes duplicate rows by adding a unique id to each row. Even when the data appears duplicated, each row remains distinct because of its id. The second rule is about atomicity—each field holds the smallest meaningful piece of data. Every table cell must contain a single value (no lists, no sets, no nested data). For example, a `Name` field is not atomic if it stores both a first name and a last name, since these can be separated into individual columns such as `FirstName` and `LastName`.
+
+A good example of 1NF can be seen with employee data. Imagine a system where employees can have multiple account numbers. The table might store these numbers across separate columns such as `AccountNumber1`, `AccountNumber2`, and so on, or combine them into a single column. First Normal Form resolves this by removing multi-valued fields and storing each value in its own row, usually by moving them into a separate related table.
+
+![first normal form example](images/first_normal_form_example.png)
+
+## 2NF
+
+2NF builds directly on 1NF, but it adds one very specific rule:
+
+1. **The table must already be in First Normal Form**
+2. **All columns that are not part of the primary key must be dependent on the entire primary key, not just a part of it**
+
+The new rule only matters when your table has a composite primary key (a primary key that is a unique combination of multiple columns). This means that 2NF addresses partial dependencies, and partial dependencies can only exist when the primary key consists of more than one column. With a single-column primary key, a column either depends on that key or it doesn’t; it cannot depend on part of it. So the specific 2NF violation cannot occur.
+
+Let’s demonstrate 2NF with a concrete example. Imagine a system that tracks which students are enrolled in which courses. For each enrollment, the system stores the student’s name, the course’s name, and the grade they received. Each row is uniquely identified by a composite primary key consisting of `StudentID` and `CourseID`.
+
+![second normal form example](images/second_normal_form_example.png)
+
+* `Grade` depends on both `StudentID` and `CourseID` → OK
+* `StudentName` depends only on `StudentID` → ❌ partial dependency<br>
+  A student’s name is repeated for every course they take.
+* `CourseName` depends only on `CourseID` → ❌ partial dependency<br>
+  A course’s name is repeated for every student enrolled.
+
+**To comply with 2NF, we split the table so that each non-key attribute resides in the table where it is fully dependent on the primary key.**
+
+![second normal form example 2](images/second_normal_form_example2.png)
+
+## 3NF
+
+3NF builds directly on 2NF, but it adds one rule:
+
+1. **The table must already be in Second Normal Form**
+2. **There must be no transitive dependencies**
+
+A transitive dependency happens when a non‑key column depends on **another non‑key column** instead of depending only on the primary key. This feels similar to 2NF, but it applies even when the primary key is a single column.
+
+Let's look at an example where 3NF is violated.
+
+![third normal form example](images/third_normal_form_example.png)
+
+* `DepartmentID` depends on the `EmployeeID` which is the primary key → OK
+* `DepartmentName` depends on `DepartmentID` which is not the primary key → ❌ transitive dependency
+
+**To bring the table into 3NF, we split it so that every non‑key column depends directly on the primary key and not on any other non‑key column.**
+
+![third normal form example 2](images/third_normal_form_example2.png)
+
+## BCNF
+
+There is still a way for redundant data to appear in tables even if they follow Third Normal Form (3NF). This happens when a column that is not a key determines another column. When this occurs, the same information must be repeated in multiple rows. BCNF removes this problem.
+
+A table is in BCNF if:
+1. **The table is already in Third Normal Form**
+2. **Every determinant is a candidate key**
+
+A determinant is a column (or set of columns) whose value determines another column. A candidate key uniquely identifies a row, just like a primary key, but it is not necessarily chosen as the table’s primary identifier. Every primary key is a candidate key, but a table may have more than one candidate key.
+
+Let's compare a table that satisfies BCNF with one that violates it.
+
+<h3>✅ Table that satisfies BCNF</h3>
+
+In a `Student` table with columns (`StudentID`, `Email`, `Name`):
+- `StudentID` uniquely identifies a row (a student)
+- `Email` also uniquely identifies a row
+
+So `StudentID` and `Email` are both candidate keys. Nothing depends on `Name`, so the table satisfies BCNF.
+
+![bcnf example](images/bcnf_example.png)
+
+<h3>❌ Table that violates BCNF</h3>
+
+In an `Employee` table with columns (`EmployeeID`, `Department`, `Manager`):
+- `EmployeeID` uniquely identifies a row (an employee)
+- Each `Department` has exactly one `Manager` 
+
+The problem is that `Department` determines `Manager`, but `Department` is not a candidate key. `Department` cannot uniquely identify a row in this table because multiple employees can belong to the same department. This means the manager information is repeated for every employee in the same department, which violates BCNF because a determinant is not a candidate key.
+
+![bcnf example 2](images/bcnf_example2.png)
+
+## Denormalization
+
+Normalization is a data‑modeling technique that can be applied to any relational system, but in practice it is most closely associated with OLTP. OLTP workloads benefit from normalization because it reduces redundancy, enforces data integrity, and supports fast, concurrent writes. In OLAP systems, normalization is used much more selectively: highly normalized structures introduce additional joins, which slow down large‑scale analytical queries. For this reason, OLAP environments favor read‑optimized modeling patterns such as star schemas (lightly denormalized), snowflake schemas (normalized dimensions), and fully denormalized wide tables common in modern columnar warehouses.
+
+Two reasons to denormalize:
+1. **Reduce I/O time**
+2. Reduce the complexity of queries 
+
+Denormalization often involves combining data from multiple normalized tables into a single table or view, so that queries can read it directly without performing many joins.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<br><br><br><br><br><br><br><br><br><br><br><br>
+
+
+
+
+
+# ACID Transactions (OLTP)
+
+[How to write ACID transactions](https://www.datacamp.com/blog/acid-transactions)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<br><br><br><br><br><br><br><br><br><br><br><br>
+
+
+
 # Data Modelling
 
 Data modelling is all about database design and occurs across **three stages**
@@ -629,7 +1046,7 @@ OLTP databases ensure that every operation is ACID:
 - **Isolated** (transactions don’t interfere with each other)
 - **Durable** (once saved, it stays saved)
 
-**Example:** Transferring $100 to your wife — Atomicity: money leaves your account and enters your wife’s account; both steps must occur or none at all. Consistency: the $100 deducted from your account is exactly added to your wife’s account. Isolation: your neighbor’s transaction does not affect yours. *urability: once completed, the transfer persists even after a system crash, so confirmed data is never lost.
+**Example:** Transferring $100 to your wife — Atomicity: money leaves your account and enters your wife’s account; both steps must occur or none at all. Consistency: the $100 deducted from your account is exactly added to your wife’s account. Isolation: your neighbor’s transaction does not affect yours. Durability: once completed, the transfer persists even after a system crash, so confirmed data is never lost.
 
 ### OLAP
 
@@ -673,7 +1090,7 @@ From these, we can define the relationships:
 - A Member can have zero or many Loans.
 - A Book can appear in zero or many Loans.
 - Each Loan links exactly one Member to exactly one Book.
-- A Book can have one or many Authors, and an Author can write zero or many Books.  
+- A Book can have one or many Authors (not supported by Visual Paradigm), and an Author can write zero or many Books.  
 
 ![conceptual data modelling](images/conceptual_data_modelling_example.png)
 
@@ -779,75 +1196,35 @@ If someone borrows 3 books, we create 3 loan rows.
 
 This keeps the model consistent and avoids hidden complexity.
 
-## Physical
+### Documentation
 
-### Constraints 
+The logical model is strengthened by thorough documentation, which provides the level of detail needed for accurate implementation. Artifacts such as a data dictionary, a business glossary, and a relationship matrix help clarify the structure, meaning, and interactions within the data model.
 
-Constraints are rules applied to a table’s columns to enforce data integrity. They ensure that data meets specific conditions and prevent invalid entries. If these rules are violated, an error is raised, and the data is not entered into the database.
+**Data Dictionary: a structured description of every table and column** 
+- Table name
+- Column name
+- Data type (and length)
+- Nullability requirements
+- Business descritpion in plain language
+- Allowed values
+- Example values
 
-Constraints can be defined when **creating a table**
+![data dictionary example](images/data%20dictionary.png)
 
-```sql
-CREATE TABLE employees (
-    id INT PRIMARY KEY,
-    -- PRIMARY KEY uniquely identifies each employee
+**Business Rule Catalog: what the business allows and forbids**
+- Rule description
+- Tables involved
+- Columns involved
+- How the rule is enforced
 
-    name NVARCHAR(100) UNIQUE,
-    -- UNIQUE ensures no two employees have the same name
+![business rule catalog example](images/business%20rule%20catalog.png)
 
-    title NVARCHAR(100) NOT NULL,
-    -- NOT NULL ensures the title cannot be empty
+**Relationshp Matrix: a description of relationships**
+- Parent table
+- Parent key
+- Child table
+- Child table's foreign key
+- Cardinality
+- Business meaning of the relationship
 
-    salary DECIMAL,
-    country NVARCHAR(100)
-);
-```
-
-or added later by **altering an existing table**. In SQL Server, any constraint added with `ALTER TABLE` must have a name, and when adding a `DEFAULT`, the target column must also be specified
-
-```sql
-ALTER TABLE employees
-ADD CONSTRAINT check_salary CHECK (salary >= 0);
--- CHECK ensures salary is non-negative
-
-ALTER TABLE employees
-ADD CONSTRAINT df_country DEFAULT 'Cyprus' FOR country;
--- DEFAULT provides a default value if none is given
-```
-
-**Note:** A single column can have **multiple constraints** applied at the same time (e.g., `NOT NULL`, `UNIQUE`, `CHECK`) either inline during `CREATE TABLE` or via separate `ALTER TABLE` statements.
-
-#### Primary & Foreign Keys
-
-A key defines and protects relationships between tables. 
-
-A `PRIMARY KEY` is a special column that uniquely identifies each record within a table. Each table can have **only one primary key**. It’s very common to name this column `id`, and it is almost always the primary key for the table. No two rows can share the same `id`. By definition, a primary key is always `NOT NULL`.
-
-`FOREIGN KEY`s are what make relational databases relational. A foreign key is a column in one table that references the primary key of another table. This means that that *any value inserted into the foreign key column must already exist in the referenced column*. What's more, a foreign key does not automatically enforce `NOT NULL`, and it does not always have to be non-null. For example, a `books` table might allow books with unknown authors — in the example below, author_id can be `NULL`.
-
-```sql
-CREATE TABLE authors (
-    id INT PRIMARY KEY
-    -- PRIMARY KEY
-);
-
-CREATE TABLE books (
-    id INT PRIMARY KEY,
-    -- PRIMARY KEY for books
-
-    author_id INT,
-    CONSTRAINT fk_authors FOREIGN KEY (author_id) REFERENCES authors(id)
-    -- FOREIGN KEY referencing authors
-);
-```
-
-**Note:** In SQL Server, foreign keys can also be added after table creation using `ALTER TABLE`.
-
-### Normalization (OLTP)
-
-Normalization is a data‑modeling technique that can be applied to any relational system, but in practice it is most closely associated with OLTP. OLTP workloads benefit from normalization because it reduces redundancy, enforces data integrity, and supports fast, concurrent writes. In OLAP systems, however, normalization is rare because it works against fast analytical reads: splitting data across many tables increases the number of joins and slows down large‑scale aggregations. For this reason, OLAP environments typically rely on modeling patterns optimized for read performance, such as star schemas (lightly denormalized), snowflake schemas (slightly normalized), and wide denormalized tables common in modern columnar warehouses.
-
-
-### ACID Transactions (OLTP)
-
-[How to write ACID transactions](https://www.datacamp.com/blog/acid-transactions)
+![relationship matrix example](images/relationship%20matrix.png)
