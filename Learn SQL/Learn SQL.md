@@ -36,24 +36,21 @@ Choose your topic from the list below
 - [Constraints](#constraints)
   - [Primary \& Foreign Keys](#primary--foreign-keys)
 - [Table Relationships](#table-relationships)
-- [Normalization](#normalization)
-  - [1NF](#1nf)
-  - [2NF](#2nf)
-  - [3NF](#3nf)
-  - [BCNF](#bcnf)
-  - [Denormalization](#denormalization)
-- [ACID Transactions (OLTP)](#acid-transactions-oltp)
-- [Data Modelling](#data-modelling)
-  - [Conceptual](#conceptual)
-    - [OLTP](#oltp)
-    - [OLAP](#olap)
-    - [Visualize (High-Level)](#visualize-high-level)
-  - [Logical](#logical)
-    - [OLTP Workflow](#oltp-workflow)
-    - [OLAP Workflow](#olap-workflow)
-      - [The Holy... Grain](#the-holy-grain)
-    - [Visualize (Low-Level)](#visualize-low-level)
-    - [Documentation](#documentation)
+- [Database Architectures](#database-architectures)
+  - [OLTP](#oltp)
+    - [ACID Transactions in SQL Server](#acid-transactions-in-sql-server)
+      - [Transaction Modes](#transaction-modes)
+      - [Managing Transactions](#managing-transactions)
+      - [Error Handling](#error-handling)
+      - [Nested Transactions \& Savepoints](#nested-transactions--savepoints)
+      - [Isolation: Managing Concurrent Data Access](#isolation-managing-concurrent-data-access)
+    - [Normalization](#normalization)
+      - [1NF](#1nf)
+      - [2NF](#2nf)
+      - [3NF](#3nf)
+      - [BCNF](#bcnf)
+  - [OLAP](#olap)
+    - [Denormalization](#denormalization)
 
 ---
 
@@ -711,8 +708,244 @@ A relationship between tables assumes that one of these tables has a foreign key
   );
   ```
 
+# Database Architectures
 
-# Normalization 
+Databases are designed to serve different needs: transactional operations (OLTP; Online Transaction Processing) or analytical insights (OLAP; Online Analytical Processing). OLTP systems handle day-to-day transactions with fast inserts, updates, and deletes, using highly normalized schemas to maintain data integrity. OLAP systems, in contrast, are optimized for querying, reporting, and analytics, often using dimensional models such as star or snowflake schemas to organize historical and aggregated data efficiently.
+
+![OLTP_OLAP](images/OLTP_OLAP.png)
+
+OLTP handles **more frequent operations**, but OLAP handles **more data overall**:
+* OLTP databases focus on **many small, fast transactions** (like orders, payments, bookings). 
+* OLAP databases focus on **aggregated and historical data** for analysis. They store **large volumes of transactional data over time** to generate insights, reports, and trends.
+
+## OLTP
+
+OLTP databases are used in systems where lots of small operations happen constantly — like banking, shopping carts, airline bookings, or inventory systems. These databases are **optimized for write operations**, making them ideal for applications with a **high number of concurrent users**, where user data must be retrieved, updated, or deleted **in real-time**.
+
+So they must handle:
+- **Insert** → adding new data (e.g., a new order)
+- **Update** → modifying existing data (e.g., changing a seat reservation)
+- **Delete** → removing data (e.g., canceling a booking)
+
+And they must be:
+- **Fast** → because users are waiting in real time
+- **Reliable** → no data loss or corruption
+- **Consistent** → the data must always make sense (no half-finished transactions)
+
+OLTP databases ensure that every operation is ACID:
+- **Atomic** (all or nothing)
+- **Consistent** (rules are always followed)
+- **Isolated** (transactions don’t interfere with each other)
+- **Durable** (once saved, it stays saved)
+
+**Example:** Transferring $100 to your wife — Atomicity: money leaves your account and enters your wife’s account; both steps must occur or none at all. Consistency: the $100 deducted from your account is exactly added to your wife’s account. Isolation: your neighbor’s transaction does not affect yours. Durability: once completed, the transfer persists even after a system crash, so confirmed data is never lost.
+
+### ACID Transactions in SQL Server
+
+A transaction is a sequence of one or more SQL operations (such as inserts, updates, or deletes) executed as a single unit of work. If any operation fails, the entire transaction fails, preventing partial data from being stored. Transactions are the atomic unit in ACID, and together with the other ACID properties (consistency, isolation, and durability), they help maintain data integrity by ensuring that all changes can be undone using a rollback if an error occurs.
+
+#### Transaction Modes 
+
+Transaction Modes in SQL Server determine how transactions are started, managed, and committed. 
+
+**Auto-commit**
+- This is the default mode used by most people without knowing.
+- Every individual SQL statement (like `INSERT`, `UPDATE`, or `DELETE`) is treated as a separate transaction.
+- Each statement is automatically committed if it succeeds, or rolled back if it fails.
+- You don’t need to explicitly use `BEGIN TRANSACTION` or `COMMIT`.
+
+```sql
+-- This statement is automatically a transaction
+UPDATE Accounts
+SET Balance = Balance - 100
+WHERE AccountID = 1;
+
+-- This statement is a separate transaction
+UPDATE Accounts
+SET Balance = Balance + 100
+WHERE AccountID = 2;
+```
+
+**Implicit transactions**
+- In this mode, a transaction starts automatically when a modifying statement (like `INSERT`, `UPDATE`, or `DELETE`) is executed.
+- The transaction stays open until you explicitly end it with `COMMIT` or `ROLLBACK`.
+- You don’t need to use `BEGIN TRANSACTION` to start it.
+- Useful when you want multiple statements to be part of a single transaction without explicitly starting it.
+- You must remember to commit or roll back, otherwise changes remain uncommitted.
+
+```sql
+-- Turn on implicit transactions
+SET IMPLICIT_TRANSACTIONS ON;
+
+-- First modifying statement starts a transaction automatically
+UPDATE Accounts
+SET Balance = Balance - 100
+WHERE AccountID = 1;
+
+-- Second modifying statement continues the same transaction
+UPDATE Accounts
+SET Balance = Balance + 100
+WHERE AccountID = 2;
+
+-- Transaction is still open, must explicitly commit
+COMMIT TRANSACTION;
+
+-- or ROLLBACK if something went wrong
+-- ROLLBACK TRANSACTION;
+```
+
+**Explicit transactions**
+- You explicitly define the start of the transaction.
+- All statements between `BEGIN TRANSACTION` and the end are part of the same transaction.
+- You must explicitly end the transaction with `COMMIT` (to save changes) or `ROLLBACK` (to undo changes).
+- Gives full control over multiple statements, ensuring atomicity across complex operations.
+- Useful for business logic where several related changes must either all succeed or all fail.
+
+```sql
+-- Start an explicit transaction
+BEGIN TRANSACTION;
+
+-- First statement
+UPDATE Accounts
+SET Balance = Balance - 100
+WHERE AccountID = 1;
+
+-- Second statement
+UPDATE Accounts
+SET Balance = Balance + 100
+WHERE AccountID = 2;
+
+-- If everything is fine, save changes
+COMMIT TRANSACTION;
+
+-- If something went wrong, you could use:
+-- ROLLBACK TRANSACTION;
+```
+
+#### Managing Transactions
+
+To check how many open transactions exist in the current session, use `SELECT @@TRANCOUNT`. It returns the number of transactions that have been started but not yet committed or rolled back. This is especially useful when errors occur, as it lets you see if a transaction is still open and decide whether to roll it back. As a best practice, transactions should be rolled back after an error to ensure data integrity and release any held resources.
+
+Another way to manage transactions is through Dynamic Management Views (DMVs)
+- `SELECT * FROM sys.dm_exec_sessions WHERE open_transaction_count > 0;` → Shows information about active sessions (connections) that currently have one or more open transactions. In the returned output, the `open_transaction_count` columns displays the number of open transactions for each session.
+- `SELECT * FROM sys.dm_exec_requests WHERE session_id > 55;` → Displays details about currently executing requests (queries or commands) on the server, filtering out most system sessions to focus on user activity.
+- `SELECT * FROM sys.dm_tran_database_transactions WHERE database_id > 4;` → Provides information about transactions that are currently open and active, filtering out system databases to focus on user databases. For database clarity, the `database_id` can be matched with `SELECT * FROM sys.databases` to see the database name. If no transactions are open, the query returns no rows; if transactions are open, it returns one row for each active transaction.
+
+#### Error Handling
+
+`TRY...CATCH` ensures that if any statement in a transaction fails, all changes are rolled back, preventing partial updates and maintaining data integrity. This is especially important in automated or real-time systems, where manual intervention isn’t possible but data consistency must be preserved.
+
+```sql
+BEGIN TRY
+    BEGIN TRANSACTION;
+
+    -- Your SQL statements go here
+    UPDATE Table1 SET ColumnA = Value1 WHERE Condition1;
+    UPDATE Table2 SET ColumnB = Value2 WHERE Condition2;
+
+    COMMIT TRANSACTION;  -- Only commits if no errors occur
+END TRY
+BEGIN CATCH
+    ROLLBACK TRANSACTION; -- Undo all changes if any error occurs
+
+    -- Optional: log or display the error
+    SELECT ERROR_NUMBER() AS ErrorNumber,
+           ERROR_LINE() AS ErrorLine,
+           ERROR_MESSAGE() AS ErrorMessage;
+END CATCH;
+```
+
+#### Nested Transactions & Savepoints
+
+A nested transaction is a transaction started inside another transaction using `BEGIN TRANSACTION`.
+- **Usage**: It’s used when you want to logically group multiple operations inside a larger transaction, often in stored procedures or complex business logic.
+- **Behavior**: Only **the outermost transaction controls the final commit**; inner `COMMIT`s just decrement `@@TRANCOUNT` and don’t make changes permanent. A `ROLLBACK` at any level rolls back the **entire outer transaction**.
+
+In SQL Server, you don’t need multiple `BEGIN TRANSACTION` statements because nested transactions are not treated as independent units. To achieve the effect of real nested transactions, SQL Server uses savepoints—markers set inside a transaction that allow you to partially roll back to a specific point without undoing the entire transaction.
+
+```sql
+-- Start the outermost transaction
+BEGIN TRANSACTION;
+
+    INSERT INTO MyTable VALUES (1, 'Tayo', 'Makinde');
+    INSERT INTO MyTable VALUES (2, 'Eze', 'Falade');
+
+    ----------------------------------------------------
+    -- Savepoint 1 (simulates a nested transaction)
+    ----------------------------------------------------
+    SAVE TRANSACTION SavePoint1;
+
+        INSERT INTO MyTable VALUES (3, 'Seyi', 'Bello');
+        INSERT INTO MyTable VALUES (4, 'Uzo', 'Okafor');
+
+    -- ROLLBACK TRANSACTION SavePoint1;  -- optional: undo only changes after SavePoint1
+
+    ----------------------------------------------------
+    -- Savepoint 2 (another simulated nested transaction)
+    ----------------------------------------------------
+    SAVE TRANSACTION SavePoint2;
+
+        INSERT INTO MyTable VALUES (5, 'Seyi', 'Bello');
+        INSERT INTO MyTable VALUES (6, 'Uzo', 'Okafor');
+
+    -- ROLLBACK TRANSACTION SavePoint2;  -- optional: undo only changes after SavePoint2
+
+-- Commit the outermost transaction (saves all changes that were not rolled back)
+COMMIT TRANSACTION;
+```
+
+#### Isolation: Managing Concurrent Data Access
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Traditional SQL databases enforce ACID properties using transaction control commands such as `BEGIN`, `COMMIT`, and `ROLLBACK`, while mechanisms like transaction [logs](https://www.mssqltips.com/tutorial/what-is-the-transaction-log/) and [locks](https://medium.com/@thinunesc/understanding-locks-in-database-transactions-5cb156d67314) maintain data integrity and consistency.
+
+
+
+Isolation
+
+SQL Server  provides an isolation command which lets you choose stricter levels of isolation. Default level is `READ COMMITTED`
+```sql
+SET TRANSACTION ISOLATION LEVEL <level>
+```
+
+| **Isolation Level** | **What It Means** |
+|----------------------|-------------------|
+| **READ UNCOMMITTED** | You might see data that another transaction hasn’t finished saving yet. |
+| **READ COMMITTED** *(default)* | You only see data that has been fully saved (committed). |
+| **REPEATABLE READ** | Any rows you read cannot be changed by others until your transaction finishes. |
+| **SERIALIZABLE** | No one can change the rows you read *or* add new rows that would match your query until you finish. |
+| **SNAPSHOT** | You see a stable “frozen” version of the data as it looked when your transaction started, even if others change it later. |
+
+Why does SQL Server even offer different levels? Because different applications need different behavior:
+- Banking apps → strict
+- Reporting dashboards → relaxed
+
+
+
+
+
+
+ACID Property	SQL Server Implementation
+Atomicity	BEGIN TRAN, COMMIT, ROLLBACK, TRY/CATCH
+Consistency	Constraints, triggers, data types
+Isolation	SET TRANSACTION ISOLATION LEVEL
+Durability	Transaction log, WAL, checkpoints
+
+[How to write ACID transactions](https://www.datacamp.com/blog/acid-transactions)
+
+### Normalization 
 
 Database normalization is a method for structuring your database schema in a way that improves data integrity and reduces redundancy. Put simply, normalization is about shaping your tables so they contain less duplicate data and more consistent, reliable data. The goal is to store data in its simplest form without unnecessary copies, because duplicate data can lead to bugs. For example, a value might be updated in one table but not in another, resulting in an invalid database state — leaving uncertainty about which value is correct.
 
@@ -726,7 +959,7 @@ The more normalized a database is, the less duplicate data it contains. Normaliz
 
 ![normal forms](images/normal_forms.png)
 
-## 1NF
+#### 1NF
 
 First Normal Form has two rules:
 
@@ -739,7 +972,7 @@ A good example of 1NF can be seen with employee data. Imagine a system where emp
 
 ![first normal form example](images/first_normal_form_example.png)
 
-## 2NF
+#### 2NF
 
 2NF builds directly on 1NF, but it adds one very specific rule:
 
@@ -762,7 +995,7 @@ Let’s demonstrate 2NF with a concrete example. Imagine a system that tracks wh
 
 ![second normal form example 2](images/second_normal_form_example2.png)
 
-## 3NF
+#### 3NF
 
 3NF builds directly on 2NF, but it adds one rule:
 
@@ -782,7 +1015,7 @@ Let's look at an example where 3NF is violated.
 
 ![third normal form example 2](images/third_normal_form_example2.png)
 
-## BCNF
+#### BCNF
 
 There is still a way for redundant data to appear in tables even if they follow Third Normal Form (3NF). This happens when a column that is not a key determines another column. When this occurs, the same information must be repeated in multiple rows. BCNF removes this problem.
 
@@ -814,7 +1047,21 @@ The problem is that `Department` determines `Manager`, but `Department` is not a
 
 ![bcnf example 2](images/bcnf_example2.png)
 
-## Denormalization
+## OLAP
+
+OLAP systems are **optimized for read operations** and built to help business users extract insights from data. Their **primary users are analysts**,  rather than everyday operational staff as in OLTP environments.
+The core purpose of OLAP is to transform detailed transactional data into meaningful information by shifting the focus from individual transactions to aggregated data.
+
+OLAP workflows typically begin with data collected from multiple sources and ingested into a central repository, such as a data warehouse or lakehouse, where it is transformed, cleaned, and consolidated into a single source of truth. On top of this authoritative dataset, an analytical layer is introduced to support fast, multidimensional querying.
+
+- In traditional architectures, this layer is implemented as a dedicated OLAP database built from the warehouse and stored in the form of [OLAP cubes](https://www.keboola.com/blog/olap-cubes).
+- In **modern architectures**, the analytical layer is provided by columnar, SQL‑based analytical engines (e.g., Snowflake, DuckDB, BigQuery, Azure Synapse SQL) that do not require cubes and instead query the warehouse or lakehouse directly.
+
+Analysts can then run ad‑hoc queries or build dashboards and reporting solutions on top of this analytical layer to support deeper analysis and data‑driven decision‑making.
+
+![OLAP_workflow](images/OLAP_workflow.png)
+
+### Denormalization
 
 Normalization is a data‑modeling technique that can be applied to any relational system, but in practice it is most closely associated with OLTP. OLTP workloads benefit from normalization because it reduces redundancy, enforces data integrity, and supports fast, concurrent writes. In OLAP systems, normalization is used much more selectively: highly normalized structures introduce additional joins, which slow down large‑scale analytical queries. For this reason, OLAP environments favor read‑optimized modeling patterns such as star schemas (lightly denormalized), snowflake schemas (normalized dimensions), and fully denormalized wide tables common in modern columnar warehouses.
 
@@ -840,391 +1087,3 @@ Denormalization often involves combining data from multiple normalized tables in
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<br><br><br><br><br><br><br><br><br><br><br><br>
-
-
-
-
-
-# ACID Transactions (OLTP)
-
-[How to write ACID transactions](https://www.datacamp.com/blog/acid-transactions)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<br><br><br><br><br><br><br><br><br><br><br><br>
-
-
-
-# Data Modelling
-
-Data modelling is all about database design and occurs across **three stages**
-
-1. Conceptual = big picture
-   
-    ```
-    Conceptual schemas offer a big-picture view of what the system will contain, how it will be organized, and which business rules are involved. 
-    Conceptual models are usually created as part of the process of gathering initial project requirements.
-    ```
-
-2. Logical = detailed design
-   
-    ```
-    Logical database schemas are less abstract, compared to conceptual schemas. 
-    They clearly define schema objects with information, such as table names, field names, entity relationships, and integrity constraints — i.e. any rules that govern the database. 
-    However, they do not typically include any technical requirements.
-    ```
-
-3. Physical = actual implementation
-
-    ```
-    Physical database schemas provide the technical information that the logical database schema type lacks in addition to the contextual information, such as table names, field names, entity relationships, et cetera. 
-    That is, it also includes the syntax that will be used to create these data structures within disk storage.
-    ```
-
-The entire idea is that the physical database is built after the blueprint is validated, so you don’t “dig into construction” before knowing what works. By modelling first, you spot design flaws early, decide on normalization vs denormalization, plan for query patterns and reporting needs, and avoid costly changes later which are 99.99% guaranteed.
-
-## Conceptual
-
-Databases are designed to serve different needs: transactional operations (OLTP; Online Transaction Processing) or analytical insights (OLAP; Online Analytical Processing). OLTP systems handle day-to-day transactions with fast inserts, updates, and deletes, using highly normalized schemas to maintain data integrity. OLAP systems, in contrast, are optimized for querying, reporting, and analytics, often using dimensional models such as star or snowflake schemas to organize historical and aggregated data efficiently.
-
-The conceptual stage is usually where we decide the type of database system.
-
-![OLTP_OLAP](images/OLTP_OLAP.png)
-
-OLTP handles **more frequent operations**, but OLAP handles **more data overall**:
-* OLTP databases focus on **many small, fast transactions** (like orders, payments, bookings). 
-* OLAP databases focus on **aggregated and historical data** for analysis. They store **large volumes of transactional data over time** to generate insights, reports, and trends.
-
-### OLTP
-
-OLTP databases are used in systems where lots of small operations happen constantly — like banking, shopping carts, airline bookings, or inventory systems. These databases are **optimized for write operations**, making them ideal for applications with a **high number of concurrent users**, where user data must be retrieved, updated, or deleted **in real-time**.
-
-So they must handle:
-- **Insert** → adding new data (e.g., a new order)
-- **Update** → modifying existing data (e.g., changing a seat reservation)
-- **Delete** → removing data (e.g., canceling a booking)
-
-And they must be:
-- **Fast** → because users are waiting in real time
-- **Reliable** → no data loss or corruption
-- **Consistent** → the data must always make sense (no half-finished transactions)
-
-OLTP databases ensure that every operation is ACID:
-- **Atomic** (all or nothing)
-- **Consistent** (rules are always followed)
-- **Isolated** (transactions don’t interfere with each other)
-- **Durable** (once saved, it stays saved)
-
-**Example:** Transferring $100 to your wife — Atomicity: money leaves your account and enters your wife’s account; both steps must occur or none at all. Consistency: the $100 deducted from your account is exactly added to your wife’s account. Isolation: your neighbor’s transaction does not affect yours. Durability: once completed, the transfer persists even after a system crash, so confirmed data is never lost.
-
-### OLAP
-
-OLAP systems are **optimized for read operations** and built to help business users extract insights from data. Their **primary users are analysts**,  rather than everyday operational staff as in OLTP environments.
-The core purpose of OLAP is to transform detailed transactional data into meaningful information by shifting the focus from individual transactions to aggregated data.
-
-OLAP workflows typically begin with data collected from multiple sources and ingested into a central repository, such as a data warehouse or lakehouse, where it is transformed, cleaned, and consolidated into a single source of truth. On top of this authoritative dataset, an analytical layer is introduced to support fast, multidimensional querying.
-
-- In traditional architectures, this layer is implemented as a dedicated OLAP database built from the warehouse and stored in the form of [OLAP cubes](https://www.keboola.com/blog/olap-cubes).
-- In **modern architectures**, the analytical layer is provided by columnar, SQL‑based analytical engines (e.g., Snowflake, DuckDB, BigQuery, Azure Synapse SQL) that do not require cubes and instead query the warehouse or lakehouse directly.
-
-Analysts can then run ad‑hoc queries or build dashboards and reporting solutions on top of this analytical layer to support deeper analysis and data‑driven decision‑making.
-
-![OLAP_workflow](images/OLAP_workflow.png)
-
-### Visualize (High-Level)
-
-Once we’ve picked the database system that makes the most sense for what we’re building, the next step is to think through the actual shape of our data — what we’re storing, how it’s organized, and the business rules that tie everything together. To get there, we really just need to answer two simple questions:
-1. What are they key concepts in our business?
-2. How do they relate to one another?
-
-These key concepts ultimately become the entities in our database. But how do we know when something qualifies as an entity? In general, an entity should meet three criteria:
-
-**Identifying an Entity**
-
-1. It represents a person, place, thing, event, or concept <br>
-*Example:* A Customer is a person your business interacts with.
-
-2. It can be uniquely identified <br>
-*Example:* Each Order has a unique order number that distinguishes it from all others.
-
-3. It has attributes that describe it <br>
-*Example:* A Product has attributes like name, price, and SKU
-
-From here, the entities we’ve uncovered, along with the relationships between them, can be laid out visually in an Entity Relationship Diagram (ERD). At the conceptual stage, an ERD captures only the entities and their relationships, which are typically shown using [Crow’s Foot notation](https://www.red-gate.com/blog/crow-s-foot-notation). There are plenty of tools that can help you sketch ERDs, but if you’re after something simple and free, go for [Visual Paradigm](https://online.visual-paradigm.com/diagrams/solutions/free-erd-tool/).
-
-**ERD Example: Library Borrowing**
-
-Imagine a tiny library system with just four core concepts: Book, Author, Member and Loan <br>
-From these, we can define the relationships:
-- A Member can have zero or many Loans.
-- A Book can appear in zero or many Loans.
-- Each Loan links exactly one Member to exactly one Book.
-- A Book can have one or many Authors (not supported by Visual Paradigm), and an Author can write zero or many Books.  
-
-![conceptual data modelling](images/conceptual_data_modelling_example.png)
-
-**Loan is the mediator between `Member` and `Book`.** Although a member can be associated with a book, drawing a direct relationship between `Member` and `Book` would incorrectly suggest an inherent connection between them outside of borrowing.  To reflect the real‑world process, members are linked to books only through the `Loan` entity, which represents the borrowing event itself.
-
-## Logical
-
-By now we’ve figured out the main entities and how they relate. That gives us the big picture. Next, we start adding the structure and detail that turns this into something a developer can actually build. This is where we shift into the logical stage and shape the model into a clearer, more concrete blueprint.
-
-Several of the procedures in the logical stage overlap with what we did in the conceptual stage, so it might seem like the logical model simply adds detail to the structure we already identified. In reality, that’s not how it works. In OLTP, normalization can split entities into multiple tables and introduce new relationships. In OLAP, the entities we identified earlier must be reorganized into fact and dimension tables and fitted into schemas such as star or snowflake. So yes, the logical stage adds detail — but it also forces us to re‑iterate on the structure we defined conceptually.
-
-### OLTP Workflow
-
-| Step                          | Description                                                                 | Examples / Notes                                                                                                      |
-|-------------------------------|-----------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| Identify entities             | Determine the core business objects the system manages                      | • The system tracks **Customers**, **Orders**, **Products**, and **Payments**.<br>• These represent the primary nouns in the domain. |
-| Define attributes             | List the essential fields that describe each entity                         | • An **Order** typically includes fields such as `order_id`, `order_date`, `customer_id`, and `total_amount`.<br>• Attributes should fully describe the entity without redundancy. |
-| Define primary keys           | Establish strong, unique identifiers                        | • Choose between **natural keys** (e.g., email for Customer) and **surrogate keys** (e.g., auto‑increment IDs).<br>• Use **composite keys** when the business logic requires multi‑column uniqueness.<br>• Ensure keys align with business rules for uniqueness. |
-| Define relationships          | Specify how entities connect and depend on each other                       | • A **Customer** can have many **Orders** (one‑to‑many).<br>• **Products** and **Orders** form a many‑to‑many relationship via **OrderItems**.<br>• Identify whether relationships are **optional** (e.g., a Customer may have zero Orders) or **mandatory** (an Order must belong to a Customer). |
-| Define normalization requirements | Decide how to reduce redundancy and avoid anomalies                     | • Apply normalization to split large or repetitive tables into smaller, well‑structured ones.<br>• Remove repeating groups and duplicated data to avoid update anomalies.<br>• Choose the appropriate normalization level (often 3NF for OLTP). |
-| Define integrity rules        | Identify constraints that guarantee valid, consistent data                  | • Specify which fields can be **NULL** and which must always have a value.<br>• Add **unique constraints** (e.g., SKU must be unique).<br>• Enforce **foreign keys** to maintain referential integrity.<br>• Apply business rules such as “an order must contain at least one order item.” |
-| Define transaction boundaries | Determine what counts as a single atomic operation                          | • Identify which updates must occur together, such as inserting an Order and its OrderItems in one transaction.<br>• Ensure operations follow **ACID** principles to maintain consistency. |
-
-
-### OLAP Workflow
-
-| Step                          | Description                                                                 | Examples / Notes                                                                                                      |
-|-------------------------------|-----------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| Identify facts                | Determine the core analytical processes the warehouse must support          | • Common fact domains include **sales**, **inventory movements**, **website activity**, and **financial transactions**.<br>• These processes become **fact tables** that store measurable events. |
-| Identify dimensions           | Define descriptive entities that provide context for analysis               | • Typical dimensions include **Customer**, **Product**, **Date**, **Store**, **Region**.<br>• Dimensions answer the “who, what, when, where” of each fact. |
-| Define grain                  | Specify the level of detail represented by each row in a fact table        | • Examples of grain: **one row per order line**, **one row per inventory movement**, **one row per daily snapshot**.<br>• Measures stored at that grain may include **quantity**, **revenue**, **cost**, **click count**, etc.<br>• Grain is the most critical OLAP decision: too fine → massive tables; too coarse → loss of analytical value.<br>• Ask: **What does one row in this fact table represent?** |
-| Choose schema structure       | Select the dimensional modeling pattern                                    | • **Star schema:** fact tables + denormalized dimensions (most common).<br>• **Snowflake schema:** dimensions normalized into sub‑dimensions.<br>• **Wide denormalized tables:** often used in modern columnar engines for performance. |
-| Define hierarchies and drill paths | Organize dimension attributes from most detailed to most general      | • **Date:** Day → Month → Quarter → Year.<br>• **Product:** SKU → Category → Department.<br>• **Store:** Store → Region → Country.<br>• These hierarchies support drill‑down and roll‑up analysis. |
-| Establish relationships       | Define how facts connect to dimensions                                     | • Use **surrogate keys** for dimensions to ensure stable identifiers.<br>• Fact tables contain **foreign keys** referencing dimension tables.<br>• Relationships are typically **many‑to‑one** from fact to dimension. |
-| Plan for slowly changing dimensions | Decide how to handle changes in dimension attributes over time       | • **Type 1:** Overwrite old values (no history).<br>• **Type 2:** Add new rows to preserve full history (most common).<br>• **Type 3:** Store limited history using additional columns. |
-
-#### The Holy... Grain
-
-One concept worth expanding is grain. Once the grain is defined, everything else — measures, dimensions, table size, and the kinds of analysis you can support — flows directly from that choice. Grain represents the level of detail stored in a fact table, and it ultimately determines how powerful or limited your analytics will be. It also dictates what questions analysts can realistically answer, since the grain controls the types of queries the data can support. Getting the grain right early is essential; changing it later effectively requires redesigning and reloading the entire fact table, which becomes extremely difficult once data is already in production.
-
-`Grain = what one row in your fact table represents.`
-
-**🍕 A Simple Example: The Pizza Shop**
-
-Imagine you run a pizza shop and want to store sales data. You have several choices for grain:
-
-**Option 1**: One row per entire order
-- One row = one customer’s whole order
-- You know the total price and date
-- You cannot see which pizzas were purchased
-
-**Option 2**: One row per pizza in the order
-- One row = one pizza on the order
-- You can analyze which pizzas sell best
-- More detail, more rows
-
-**Option 3**: One row per ingredient used
-- One row = each ingredient used in each pizza
-- Extremely detailed
-- Very large table
-
-**Choose the right grain by asking:**
-
-- What questions do analysts need to answer?
-- What is the natural business event?  
-- How much detail is actually useful?
-- How large can the table be?
-
-**Simple rule**: Choose the lowest level of detail you actually need. You can always summarize later, but you can’t magically add detail you never stored. 
-
-### Visualize (Low-Level)
-
-At the logical stage, the model stops being purely descriptive and starts becoming actionable. This is where business entities turn into actual tables that a database can implement. <br>
-To do that, we answer concrete design questions such as:
-- What tables do we need?
-- What columns belong in each table?
-- What data type should each column use?
-- Which column uniquely identifies each row (the primary key)?
-- How do we connect tables using keys and relationships?
-
-**Constraints play a key role here** — they ensure the logical model captures real business rules, not just structural relationships. 
-
-Also, this is the point where we should add any **junction tables**. Relational databases cannot store a many‑to‑many relationship directly, so we must break the many‑to‑many into two one‑to‑many relationships using a junction table.
-
-**ERD Example: Library Borrowing (Extended)**
-
-We've added columns, constraints, data types and a junction table. By reading the ERD, we can see that:
-- A member can have many loans (linked via member_id)
-- A book can be in many loans over time
-- A book can appear in many BookAuthor rows
-- An Author can appear in many BookAuthor rows
-- Each BookAuthor row links one Book to one Author
-
-![logical data modelling example](images/logical_data_modelling_example.png)
-
-**Why isn’t `Loan` → `Book` a many‑to‑one?** Because a loan represents one borrowing event for one book. If we allowed a single loan to contain multiple books, then returning one book but not the others becomes messy:
-- due dates might differ
-- fines might differ
-- availability tracking becomes harder
-
-So the simplest, cleanest model is: `One loan = one book borrowed by one member at one time` <br>
-If someone borrows 3 books, we create 3 loan rows.
-
-This keeps the model consistent and avoids hidden complexity.
-
-### Documentation
-
-The logical model is strengthened by thorough documentation, which provides the level of detail needed for accurate implementation. Artifacts such as a data dictionary, a business glossary, and a relationship matrix help clarify the structure, meaning, and interactions within the data model.
-
-**Data Dictionary: a structured description of every table and column** 
-- Table name
-- Column name
-- Data type (and length)
-- Nullability requirements
-- Business descritpion in plain language
-- Allowed values
-- Example values
-
-![data dictionary example](images/data%20dictionary.png)
-
-**Business Rule Catalog: what the business allows and forbids**
-- Rule description
-- Tables involved
-- Columns involved
-- How the rule is enforced
-
-![business rule catalog example](images/business%20rule%20catalog.png)
-
-**Relationshp Matrix: a description of relationships**
-- Parent table
-- Parent key
-- Child table
-- Child table's foreign key
-- Cardinality
-- Business meaning of the relationship
-
-![relationship matrix example](images/relationship%20matrix.png)
