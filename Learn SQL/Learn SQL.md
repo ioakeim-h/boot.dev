@@ -896,6 +896,44 @@ COMMIT TRANSACTION;
 
 #### Isolation: Managing Concurrent Data Access
 
+When multiple users access a database at the same time, you can expect concurrency problems. 
+- **Dirty reads**: reading someone else’s uncommitted changes. <br>
+  Imagine reading a book while someone is still writing it - you might end up reading information that has been altered or erased. 
+- **Non-repeatable reads**: reading committed data that changes between your reads.<br>
+  Example: reading the same row twice and getting different values because it was updated and committed.
+- **Phantom reads**: running the same query twice and getting a different number of rows because someone inserted or deleted rows in the meantime.
+
+Isolation tackles concurrency problems. It ensures that when one transaction is making changes, those changes aren’t visible to other transactions until the first one is complete. Transaction isolation levels define the degree to which a transaction must be isolated from the data modifications made by other transactions.
+
+SQL Server provides an isolation command which lets you choose stricter levels of isolation: 
+
+```SQL
+SET TRANSACTION ISOLATION LEVEL <level>
+```
+
+| Isolation Level              | Allowed Concurrency Issues                                               | What It Means                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `READ UNCOMMITTED`           | Dirty reads, Non-repeatable reads, Phantom reads                         | You might see data that another transaction hasn’t finished saving yet.                                                   |
+| `READ COMMITTED` *(default)* | Non-repeatable reads, Phantom reads                                      | You only see data that has been fully saved (committed).                                                                  |
+| `REPEATABLE READ`            | Phantom reads                                                            | Any rows you read cannot be changed by others until your transaction finishes.                                            |
+| `SERIALIZABLE`               | None                                                                     | No one can change the rows you read until you finish.                                                                     |
+| `SNAPSHOT`                   | Prevents dirty reads, non-repeatable reads, and phantom reads via row versioning, but does not prevent issues like lost updates                  | You see a stable “frozen” version of the data as it looked when your transaction started, even if others change it later. |
+
+
+Different applications require different levels of isolation:
+- Banking apps → strict
+- Reporting dashboards → relaxed
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -913,35 +951,9 @@ Traditional SQL databases enforce ACID properties using transaction control comm
 
 
 
-Isolation
-
-SQL Server  provides an isolation command which lets you choose stricter levels of isolation. Default level is `READ COMMITTED`
-```sql
-SET TRANSACTION ISOLATION LEVEL <level>
-```
-
-| **Isolation Level** | **What It Means** |
-|----------------------|-------------------|
-| **READ UNCOMMITTED** | You might see data that another transaction hasn’t finished saving yet. |
-| **READ COMMITTED** *(default)* | You only see data that has been fully saved (committed). |
-| **REPEATABLE READ** | Any rows you read cannot be changed by others until your transaction finishes. |
-| **SERIALIZABLE** | No one can change the rows you read *or* add new rows that would match your query until you finish. |
-| **SNAPSHOT** | You see a stable “frozen” version of the data as it looked when your transaction started, even if others change it later. |
-
-Why does SQL Server even offer different levels? Because different applications need different behavior:
-- Banking apps → strict
-- Reporting dashboards → relaxed
 
 
 
-
-
-
-ACID Property	SQL Server Implementation
-Atomicity	BEGIN TRAN, COMMIT, ROLLBACK, TRY/CATCH
-Consistency	Constraints, triggers, data types
-Isolation	SET TRANSACTION ISOLATION LEVEL
-Durability	Transaction log, WAL, checkpoints
 
 [How to write ACID transactions](https://www.datacamp.com/blog/acid-transactions)
 
