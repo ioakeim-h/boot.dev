@@ -39,11 +39,17 @@ Choose your topic from the list below
 - [Database Architectures](#database-architectures)
   - [OLTP](#oltp)
     - [ACID Transactions in SQL Server](#acid-transactions-in-sql-server)
-      - [Transaction Modes](#transaction-modes)
-      - [Managing Transactions](#managing-transactions)
-      - [Error Handling](#error-handling)
-      - [Nested Transactions \& Savepoints](#nested-transactions--savepoints)
-      - [Isolation: Managing Concurrent Data Access](#isolation-managing-concurrent-data-access)
+      - [Atomic: Transaction Modes](#atomic-transaction-modes)
+        - [Managing Transactions](#managing-transactions)
+        - [Error Handling](#error-handling)
+        - [Nested Transactions \& Savepoints](#nested-transactions--savepoints)
+      - [Isolation: Concurrent Data Access](#isolation-concurrent-data-access)
+        - [SET TRANSACTION ISOLATION LEVEL](#set-transaction-isolation-level)
+        - [DBCC USEROPTIONS](#dbcc-useroptions)
+        - [Blocking](#blocking)
+        - [Deadlocks](#deadlocks)
+      - [Consistency \& Durability](#consistency--durability)
+      - [Best Practices](#best-practices)
     - [Normalization](#normalization)
       - [1NF](#1nf)
       - [2NF](#2nf)
@@ -742,11 +748,11 @@ OLTP databases ensure that every operation is ACID:
 
 ### ACID Transactions in SQL Server
 
-A transaction is a sequence of one or more SQL operations (such as inserts, updates, or deletes) executed as a single unit of work. If any operation fails, the entire transaction fails, preventing partial data from being stored. Transactions are the atomic unit in ACID, and together with the other ACID properties (consistency, isolation, and durability), they help maintain data integrity by ensuring that all changes can be undone using a rollback if an error occurs.
+Traditional SQL databases enforce ACID properties using transaction control commands such as `BEGIN`, `COMMIT`, and `ROLLBACK`, while mechanisms like transaction [logs](https://www.mssqltips.com/tutorial/what-is-the-transaction-log/) and [locks](https://medium.com/@thinunesc/understanding-locks-in-database-transactions-5cb156d67314) maintain data integrity and consistency.
 
-#### Transaction Modes 
+#### Atomic: Transaction Modes
 
-Transaction Modes in SQL Server determine how transactions are started, managed, and committed. 
+A transaction is a sequence of one or more SQL operations (such as inserts, updates, or deletes) executed as a single unit of work. If any operation fails, the entire transaction fails, preventing partial data from being stored. Transactions are the atomic unit in ACID, and together with the other ACID properties (consistency, isolation, and durability), they help maintain data integrity by ensuring that all changes can be undone using a rollback if an error occurs. In SQL Server, this behavior is further controlled through transaction modes, which define how transactions are started, managed, and committed.
 
 **Auto-commit**
 - This is the default mode used by most people without knowing.
@@ -822,7 +828,7 @@ COMMIT TRANSACTION;
 -- ROLLBACK TRANSACTION;
 ```
 
-#### Managing Transactions
+##### <h4>Managing Transactions</h4>
 
 To check how many open transactions exist in the current session, use `SELECT @@TRANCOUNT`. It returns the number of transactions that have been started but not yet committed or rolled back. This is especially useful when errors occur, as it lets you see if a transaction is still open and decide whether to roll it back. As a best practice, transactions should be rolled back after an error to ensure data integrity and release any held resources.
 
@@ -831,7 +837,7 @@ Another way to manage transactions is through Dynamic Management Views (DMVs)
 - `SELECT * FROM sys.dm_exec_requests WHERE session_id > 55;` → Displays details about currently executing requests (queries or commands) on the server, filtering out most system sessions to focus on user activity.
 - `SELECT * FROM sys.dm_tran_database_transactions WHERE database_id > 4;` → Provides information about transactions that are currently open and active, filtering out system databases to focus on user databases. For database clarity, the `database_id` can be matched with `SELECT * FROM sys.databases` to see the database name. If no transactions are open, the query returns no rows; if transactions are open, it returns one row for each active transaction.
 
-#### Error Handling
+##### <h4>Error Handling</h4>
 
 `TRY...CATCH` ensures that if any statement in a transaction fails, all changes are rolled back, preventing partial updates and maintaining data integrity. This is especially important in automated or real-time systems, where manual intervention isn’t possible but data consistency must be preserved.
 
@@ -855,7 +861,7 @@ BEGIN CATCH
 END CATCH;
 ```
 
-#### Nested Transactions & Savepoints
+##### <h4>Nested Transactions & Savepoints</h4>
 
 A nested transaction is a transaction started inside another transaction using `BEGIN TRANSACTION`.
 - **Usage**: It’s used when you want to logically group multiple operations inside a larger transaction, often in stored procedures or complex business logic.
@@ -894,7 +900,8 @@ BEGIN TRANSACTION;
 COMMIT TRANSACTION;
 ```
 
-#### Isolation: Managing Concurrent Data Access
+
+#### Isolation: Concurrent Data Access
 
 When multiple users access a database at the same time, you can expect concurrency problems. 
 - **Dirty reads**: reading someone else’s uncommitted changes. <br>
@@ -904,6 +911,8 @@ When multiple users access a database at the same time, you can expect concurren
 - **Phantom reads**: running the same query twice and getting a different number of rows because someone inserted or deleted rows in the meantime.
 
 Isolation tackles concurrency problems. It ensures that when one transaction is making changes, those changes aren’t visible to other transactions until the first one is complete. Transaction isolation levels define the degree to which a transaction must be isolated from the data modifications made by other transactions.
+
+##### <h4>SET TRANSACTION ISOLATION LEVEL</h4>
 
 SQL Server provides an isolation command which lets you choose stricter levels of isolation: 
 
@@ -915,47 +924,84 @@ SET TRANSACTION ISOLATION LEVEL <level>
 | ---------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
 | `READ UNCOMMITTED`           | Dirty reads, Non-repeatable reads, Phantom reads                         | You might see data that another transaction hasn’t finished saving yet.                                                   |
 | `READ COMMITTED` *(default)* | Non-repeatable reads, Phantom reads                                      | You only see data that has been fully saved (committed).                                                                  |
-| `REPEATABLE READ`            | Phantom reads                                                            | Any rows you read cannot be changed by others until your transaction finishes.                                            |
-| `SERIALIZABLE`               | None                                                                     | No one can change the rows you read until you finish.                                                                     |
-| `SNAPSHOT`                   | Prevents dirty reads, non-repeatable reads, and phantom reads via row versioning, but does not prevent issues like lost updates                  | You see a stable “frozen” version of the data as it looked when your transaction started, even if others change it later. |
+| `REPEATABLE READ`            | Phantom reads                                                            | Any rows you read cannot be changed by others until your transaction finishes, but new rows matching your query can appear.                                            |
+| `SERIALIZABLE`               | None                                                                     | No one can change or insert rows that would affect your read until your transaction finishes.                                                                     |
+| `SNAPSHOT`                   | Lost updates (other anomalies prevented via row versioning)                  | You see a consistent “frozen” snapshot of the data as it existed at the start of your transaction, even if others modify it. |
+*Note*: Row versioning means the database keeps previous versions of rows so other transactions can read a consistent snapshot without blocking writers.
 
+From weakest to strongest: `READ UNCOMMITTED → READ COMMITTED → REPEATABLE READ → SERIALIZABLE` <br>
+(SNAPSHOT is a special case — it provides strong consistency using row versioning rather than stricter locking.)
 
 Different applications require different levels of isolation:
-- Banking apps → strict
-- Reporting dashboards → relaxed
+- Banking or financial apps → require strict isolation to ensure accuracy.
+- Reporting dashboards or analytics → can use relaxed isolation for better performance.
 
+##### <h4>DBCC USEROPTIONS</h4>
 
+Once a transaction ends, the isolation level set with `SET TRANSACTION ISOLATION LEVEL` persists for the entire session until changed. `DBCC USEROPTIONS` provides a quick way to view the current session settings, including `isolation level`, which shows the isolation level that will apply to subsequent transactions.
 
+##### <h4>Blocking</h4>
 
+Blocking occurs when one transaction holds a lock on a resource and another transaction tries to access the same resource, preventing it from proceeding until the lock is released. This can lead to delays and impact overall performance. To troubleshoot,
 
+1. Identify the main blocking session
 
+```sql
+    SELECT 
+      session_id, -- Session that is being blocked
+      wait_duration_ms, 
+      wait_type, 
+      blocking_session_id -- Session doing the blocking
+    FROM sys.dm_os_waiting_tasks
+    WHERE blocking_session_id != 0
 
+    -- Another way is via SSMS: 
+    -- Right-click your database connection in Object Explorer 
+    -- Go to Reports → Standard Reports → Activity – All Blocking Transactions
+```
 
+1. Find the query and transaction that is causing the blocking
+2. Analyze why the blocking occurs 
+3. Resolve blocking by redesigning query and transaction
 
+##### <h4>Deadlocks</h4>
 
+A deadlock is a more severe form of blocking. Deadlocks occur when two or more transactions are waiting for each other to release resources that the other transaction needs before it can go forward. This creates a cycle that prevents any of them from proceeding.
 
+**Reducing the likelihood of deadlocks:**
+- Optimize queries so that there are no long-running transactions
+- Use the appropriate isolation levels
+  
+**Resolve deadlocks:**
+- Leverage deadlock priority<br>
+  Deadlock priority determines which transaction SQL Server will terminate when a deadlock occurs. Since a deadlock creates a cycle with no transaction able to proceed, SQL Server selects one “victim” to roll back so the others can continue.
+  - Default: `NORMAL` → SQL Server chooses the transaction that is least expensive to roll back.
+  - Other options: `LOW` (more likely to be chosen as victim), `HIGH` (less likely), or a numeric value from -10 to 10 (higher = higher priority).
+  ```sql
+  SET DEADLOCK_PRIORITY { LOW | NORMAL | HIGH | <numeric value> };
+  ```
 
+- Use error handling techniques
 
+#### Consistency & Durability
 
+Consistency is maintained through SQL Server’s integrity constraints—such as foreign keys, unique constraints, check constraints, and data types—which ensure that every transaction moves the database from one valid state to another.
 
+Durability guarantees that once a transaction is committed, its changes persist even after a crash. SQL Server ensures this through:
+- Transaction Log – All changes are written to the log on disk before being applied to data pages, ensuring committed work can be recovered after a crash.
+- Write‑Ahead Logging (WAL) – Log records are always flushed to disk before the corresponding data is updated.
+- Checkpointing – Dirty pages in memory are periodically written to disk, but committed transactions are already protected in the log.
+- Automatic Recovery – On restart, SQL Server replays committed transactions and rolls back uncommitted ones using the transaction log.
 
+In practice, durability relies on properly configured transaction logging and a solid backup strategy, both of which SQL Server manages automatically once set up.
 
+#### Best Practices
 
-
-
-
-
-
-
-Traditional SQL databases enforce ACID properties using transaction control commands such as `BEGIN`, `COMMIT`, and `ROLLBACK`, while mechanisms like transaction [logs](https://www.mssqltips.com/tutorial/what-is-the-transaction-log/) and [locks](https://medium.com/@thinunesc/understanding-locks-in-database-transactions-5cb156d67314) maintain data integrity and consistency.
-
-
-
-
-
-
-
-[How to write ACID transactions](https://www.datacamp.com/blog/acid-transactions)
+- Keep transactions short: minimize the number of operations inside a transaction to reduce blocking and deadlock risk.
+- Use explicit transactions
+- Error handling with `TRY...CATCH`
+- Choose the appropriate isolation level
+- Use savepoints
 
 ### Normalization 
 

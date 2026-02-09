@@ -1,6 +1,6 @@
 # Data Modelling
 
-Data modelling is all about database design and occurs across **three stages**
+Data modelling occurs across **three stages**
 
 1. Conceptual = big picture
    
@@ -53,7 +53,9 @@ These key concepts ultimately become the entities in our database. But how do we
 3. It has attributes that describe it <br>
 *Example:* A Product has attributes like name, price, and SKU
 
-From here, the entities we’ve uncovered, along with the relationships between them, can be laid out visually in an Entity Relationship Diagram (ERD). At the conceptual stage, an ERD captures only the entities and their relationships, which are typically shown using [Crow’s Foot notation](https://www.red-gate.com/blog/crow-s-foot-notation). There are plenty of tools that can help you sketch ERDs, but if you’re after something simple and free, go for [Visual Paradigm](https://online.visual-paradigm.com/diagrams/solutions/free-erd-tool/).
+From here, the entities we’ve uncovered, along with the relationships between them, can be laid out visually in an Entity Relationship Diagram (ERD). At the conceptual stage, an ERD captures only the entities and their relationships, which are typically shown using [Crow’s Foot notation](https://www.red-gate.com/blog/crow-s-foot-notation). There are plenty of tools that can help you sketch ERDs:
+- Simple, quick, free, but limited relationship types: [Visual Paradigm](https://online.visual-paradigm.com/diagrams/solutions/free-erd-tool/)
+- Simple enough, more features, automatically generates SQL code from your ERD, free: [drawDB](https://www.drawdb.app/)
 
 **ERD Example: Library Borrowing**
 
