@@ -56,6 +56,10 @@ Choose your topic from the list below
       - [3NF](#3nf)
       - [BCNF](#bcnf)
   - [OLAP](#olap)
+    - [Dimensional Modelling](#dimensional-modelling)
+      - [Grain](#grain)
+        - [Choosing Grain](#choosing-grain)
+      - [Designing Fact Tables](#designing-fact-tables)
     - [Denormalization](#denormalization)
 
 ---
@@ -1110,14 +1114,127 @@ The problem is that `Department` determines `Manager`, but `Department` is not a
 OLAP systems are **optimized for read operations** and built to help business users extract insights from data. Their **primary users are analysts**,  rather than everyday operational staff as in OLTP environments.
 The core purpose of OLAP is to transform detailed transactional data into meaningful information by shifting the focus from individual transactions to aggregated data.
 
-OLAP workflows typically begin with data collected from multiple sources and ingested into a central repository, such as a data warehouse or lakehouse, where it is transformed, cleaned, and consolidated into a single source of truth. On top of this authoritative dataset, an analytical layer is introduced to support fast, multidimensional querying.
+OLAP workflows typically begin with data collected from OLTP sources and ingested into a central repository, such as a data warehouse or lakehouse, where it is transformed, cleaned, and consolidated into a single source of truth. On top of this authoritative dataset, an analytical layer is introduced to support fast, multidimensional querying. 
 
 - In traditional architectures, this layer is implemented as a dedicated OLAP database built from the warehouse and stored in the form of [OLAP cubes](https://www.keboola.com/blog/olap-cubes).
 - In **modern architectures**, the analytical layer is provided by columnar, SQL‑based analytical engines (e.g., Snowflake, DuckDB, BigQuery, Azure Synapse SQL) that do not require cubes and instead query the warehouse or lakehouse directly.
 
-Analysts can then run ad‑hoc queries or build dashboards and reporting solutions on top of this analytical layer to support deeper analysis and data‑driven decision‑making.
+Regardless of whether the analytical layer is implemented using OLAP cubes or modern SQL-based analytical engines, data is commonly organized using **dimensional modeling** — a design approach that structures data into **fact tables** (quantitative measures) and **dimension tables** (descriptive attributes). This modeling technique makes large volumes of data easier to explore by enabling analysts to aggregate, filter, and analyze information across multiple perspectives with minimal query complexity.
 
 ![OLAP_workflow](images/OLAP_workflow.png)
+
+### Dimensional Modelling
+
+The main goal of dimensional modeling is to improve data retrieval, optimizing it for `SELECT` operations. Data is organized into fact and dimension tables: facts capture what happened, while dimensions describe the circumstances around it.
+- **Facts:** store the measurements of a business process—values you can count, sum, or average. Examples include sale quantity, price, revenue, or units sold. They answer questions like “How much?” or “How many?”.<br>
+  
+  **How to identify a fact** 
+  - It is measurable or numeric.
+  - It records an event or business process.
+  - It can be analyzed across dimensions.
+  
+- **Dimensions:** give context by answering when, where, who, and what. Examples include the date of the sale, the store, the customer, or the product. They provide the attributes analysts use to filter, group, and explore the facts. <br>
+  
+  **How to identify a dimension**
+  - It answers questions like “What?”, “Who?”, “Where?”, or “When?” about a fact.
+  - It contains descriptive or categorical attributes (names, types, IDs, categories).
+  - It is used to segment, group, or filter facts in analysis or reporting.
+
+![factsVSdimensions](images/factsVSdimensions.png)
+ 
+#### Grain
+
+Grain, or granularity, represents the level of detail each row in a fact table captures. 
+
+`Grain = what one row in your fact table represents`
+
+Grain can be coarse or fine:
+- **Coarse grain**: sales per year<br> Each row represents sales for a single year.
+- **Fine grain**: sales per minute<br> Each row represents sales for a single minute.
+
+Both show the same type of measurement at different levels of aggregation. Moving from year → month → day → minute increases the level of detail, resulting in a finer grain. To **visualize grain**, think of zoom levels on a map:
+- Country level → monthly totals
+- City level → daily totals
+- Street level → transaction grain
+  
+The data exists at different zoom levels. Grain is the zoom level you choose.
+
+##### <h4>Choosing Grain</h4>
+
+Grain ultimately determines how powerful or limited your analytics will be. It also dictates what questions analysts can realistically answer, since the grain controls the types of queries the data can support. Once the grain is defined, everything else — measures, dimensions, table size, and the kinds of analysis you can support — flows directly from that choice. Getting the grain right early is essential; changing it later effectively requires redesigning and reloading the entire fact table.
+
+**Choose the right grain by asking:**
+
+- What questions do analysts need to answer?
+- What is the natural business event?  
+- How much detail is actually useful?
+- How large can the table be?
+
+**Simple rule**: Choose the lowest level of detail you actually need. You can always summarize later, but you can’t magically add detail you never stored. 
+
+**🍕 A Simple Example: The Pizza Shop**
+
+Imagine you run a pizza shop and want to store sales data. You have several choices for grain:
+
+**Option 1**: One row per entire order
+- One row = one customer’s whole order
+- You know the total price and date
+- You cannot see which pizzas were purchased
+
+| order_id | customer | date       | total_price |
+| -------- | -------- | ---------- | ----------- |
+| 1001     | Alice    | 2026-02-16 | 25.00       |
+| 1002     | Bob      | 2026-02-16 | 18.00       |
+
+
+**Option 2**: One row per pizza in the order
+- One row = one pizza on the order
+- You can analyze which pizzas sell best
+- More detail, more rows
+
+| order_id | customer | date       | pizza      | price |
+| -------- | -------- | ---------- | ---------- | ----- |
+| 1001     | Alice    | 2026-02-16 | Margherita | 10.00 |
+| 1001     | Alice    | 2026-02-16 | Pepperoni  | 15.00 |
+| 1002     | Bob      | 2026-02-16 | Veggie     | 18.00 |
+
+
+**Option 3**: One row per ingredient used
+- One row = each ingredient used in each pizza
+- Extremely detailed
+- Very large table
+
+| order_id | customer | date       | pizza      | ingredient | ingredient_qty |
+| -------- | -------- | ---------- | ---------- | ---------- | -------------- |
+| 1001     | Alice    | 2026-02-16 | Margherita | Cheese     | 100g           |
+| 1001     | Alice    | 2026-02-16 | Margherita | Tomato     | 80g            |
+| 1001     | Alice    | 2026-02-16 | Pepperoni  | Cheese     | 100g           |
+| 1001     | Alice    | 2026-02-16 | Pepperoni  | Pepperoni  | 50g            |
+| 1002     | Bob      | 2026-02-16 | Veggie     | Cheese     | 100g           |
+| 1002     | Bob      | 2026-02-16 | Veggie     | Peppers    | 50g            |
+
+Choosing the grain is not about how many dimension fields a row contains, but about the level of aggregation each row represents; dimensions naturally follow from that decision — not the other way around. **Grain defines the level of measurement**, while **dimensions provide the context needed to interpret that measurement**. That’s why, in modeling, we define grain before adding measures or columns.
+
+
+#### Designing Fact Tables
+
+A fact table groups measurements that share the same grain. You create a new fact table when the level of detail or the business event changes, not when a new measurement appears.
+
+
+
+Fact tables hold the foreign keys to dimensional tables.
+It also holds the measurements -> it groups measurements that share the same grain.
+Overall, fact tables hold primary keys, foreign keys to dimension tables, and measures.
+
+
+
+
+
+
+
+https://www.thoughtspot.com/data-trends/data-modeling/dimensional-data-modeling
+
+
 
 ### Denormalization
 

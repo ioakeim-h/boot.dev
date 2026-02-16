@@ -55,7 +55,7 @@ These key concepts ultimately become the entities in our database. But how do we
 
 From here, the entities we’ve uncovered, along with the relationships between them, can be laid out visually in an Entity Relationship Diagram (ERD). At the conceptual stage, an ERD captures only the entities and their relationships, which are typically shown using [Crow’s Foot notation](https://www.red-gate.com/blog/crow-s-foot-notation). There are plenty of tools that can help you sketch ERDs:
 - Simple, quick, free, but limited relationship types: [Visual Paradigm](https://online.visual-paradigm.com/diagrams/solutions/free-erd-tool/)
-- Simple enough, more features, automatically generates SQL code from your ERD, free: [drawDB](https://www.drawdb.app/)
+- Simple enough, free, more features, automatically generates SQL code from your ERD: [drawDB](https://www.drawdb.app/)
 
 **ERD Example: Library Borrowing**
 
@@ -100,40 +100,6 @@ Several of the procedures in the logical stage overlap with what we did in the c
 | Define hierarchies and drill paths | Organize dimension attributes from most detailed to most general      | • **Date:** Day → Month → Quarter → Year.<br>• **Product:** SKU → Category → Department.<br>• **Store:** Store → Region → Country.<br>• These hierarchies support drill‑down and roll‑up analysis. |
 | Establish relationships       | Define how facts connect to dimensions                                     | • Use **surrogate keys** for dimensions to ensure stable identifiers.<br>• Fact tables contain **foreign keys** referencing dimension tables.<br>• Relationships are typically **many‑to‑one** from fact to dimension. |
 | Plan for slowly changing dimensions | Decide how to handle changes in dimension attributes over time       | • **Type 1:** Overwrite old values (no history).<br>• **Type 2:** Add new rows to preserve full history (most common).<br>• **Type 3:** Store limited history using additional columns. |
-
-#### The Holy... Grain
-
-One concept worth expanding is grain. Once the grain is defined, everything else — measures, dimensions, table size, and the kinds of analysis you can support — flows directly from that choice. Grain represents the level of detail stored in a fact table, and it ultimately determines how powerful or limited your analytics will be. It also dictates what questions analysts can realistically answer, since the grain controls the types of queries the data can support. Getting the grain right early is essential; changing it later effectively requires redesigning and reloading the entire fact table, which becomes extremely difficult once data is already in production.
-
-`Grain = what one row in your fact table represents.`
-
-**🍕 A Simple Example: The Pizza Shop**
-
-Imagine you run a pizza shop and want to store sales data. You have several choices for grain:
-
-**Option 1**: One row per entire order
-- One row = one customer’s whole order
-- You know the total price and date
-- You cannot see which pizzas were purchased
-
-**Option 2**: One row per pizza in the order
-- One row = one pizza on the order
-- You can analyze which pizzas sell best
-- More detail, more rows
-
-**Option 3**: One row per ingredient used
-- One row = each ingredient used in each pizza
-- Extremely detailed
-- Very large table
-
-**Choose the right grain by asking:**
-
-- What questions do analysts need to answer?
-- What is the natural business event?  
-- How much detail is actually useful?
-- How large can the table be?
-
-**Simple rule**: Choose the lowest level of detail you actually need. You can always summarize later, but you can’t magically add detail you never stored. 
 
 ### Visualize (Low-Level)
 
