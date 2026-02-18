@@ -60,6 +60,14 @@ Choose your topic from the list below
       - [Grain](#grain)
         - [Choosing Grain](#choosing-grain)
       - [Designing Fact Tables](#designing-fact-tables)
+        - [Signs of a Poorly Designed Fact Table](#signs-of-a-poorly-designed-fact-table)
+      - [Designing Dimensions](#designing-dimensions)
+        - [Hierarchies Enable Drill-down](#hierarchies-enable-drill-down)
+        - [Date and Time Dimensions](#date-and-time-dimensions)
+        - [Degenerate Dimensions](#degenerate-dimensions)
+        - [Signs of a Poorly Designed Dimension](#signs-of-a-poorly-designed-dimension)
+      - [Star Schema Relationships](#star-schema-relationships)
+      - [Naming Conventions](#naming-conventions)
     - [Denormalization](#denormalization)
 
 ---
@@ -1218,23 +1226,125 @@ Choosing the grain is not about how many dimension fields a row contains, but ab
 
 #### Designing Fact Tables
 
-A fact table groups measurements that share the same grain. You create a new fact table when the level of detail or the business event changes, not when a new measurement appears.
+A fact table represents a measurable business process:
+* Has a primary key (often a surrogate key or a composite of foreign keys) to uniquely identify each row.
+* Stores numeric measures (e.g., amount, quantity, duration) consistent with its grain.
+* Contains foreign keys—typically surrogate keys—linking to dimension tables.
+* May store source system natural keys to trace records back to the originating operational system.
 
+Fact tables group measurements that share the same grain. A new fact table is created when the level of detail or the business event changes, not when a new measure is added.
 
+##### <h4>Signs of a Poorly Designed Fact Table</h4>
 
-Fact tables hold the foreign keys to dimensional tables.
-It also holds the measurements -> it groups measurements that share the same grain.
-Overall, fact tables hold primary keys, foreign keys to dimension tables, and measures.
+* **Duplicate rows** due to missing or improper primary key
+* **Foreign keys missing or inconsistent**, making joins to dimensions unreliable
+* **Measures not aligned with the grain**, e.g., storing totals alongside line-level details
+* **Overloaded with too many unrelated measures**, better split into multiple fact tables
+* **No traceability**, lacking source system keys for auditing or reconciliation
+  
+![messy_fact_table](images/messy_fact_table.png)
 
+#### Designing Dimensions
 
+Dimensions are the context of analysis:
+- Have a surrogate key (primary key, warehouse-generated)
+- May store a natural key from the source system
+- Hold descriptive attributes (name, category, status, etc.)
+- May contain hierarchical attributes (City → State → Country)
+- May contain date-related attributes (Year, Quarter, Month, DayOfWeek — especially in a Date dimension)
+- May include indicator/flag attributes (IsMember, IsActive, IsCurrent)
+- May include numeric descriptors (e.g., unit_price, square_footage — if they describe the entity rather than represent measurable events)
 
+##### <h4>Hierarchies Enable Drill-down</h4>
 
+Hierarchical attributes like City, State, and Country enable drill-down analysis, which is the ability to navigate data from higher levels of aggregation to more detailed levels (Country → State), allowing analysts to move from summarized views (e.g., total sales by Country) to progressively finer granularity (State, then City) in order to understand patterns, identify trends, or investigate anomalies.
 
+```sql
+-- Total sales by State within each Country
+SELECT country, state, SUM(sale_amount) AS total_sales
+FROM fact_sales f
+JOIN dim_location l ON f.location_key = l.location_key
+GROUP BY country, state;
+```
 
+##### <h4>Date and Time Dimensions</h4>
 
-https://www.thoughtspot.com/data-trends/data-modeling/dimensional-data-modeling
+In a data warehouse, **Date and Time dimensions are usually fully built in advance**, rather than being created dynamically as data arrives. During the data loading process (ETL), each record in the fact table is assigned a `date_key` that corresponds to a row in the Date dimension. This key is either derived directly from the source date (for example, `YYYYMMDD`) or obtained by looking up the matching date in the Date dimension. The fact table then stores only the `date_key`, and queries later join the fact table to the Date dimension using this key to retrieve calendar attributes such as day, month, or year.
 
+`dim_date`
+| date_key | full_date  | month | year |
+| -------- | ---------- | ----- | ---- |
+| 20260218 | 2026-02-18 | 2     | 2026 |
+| 20260219 | 2026-02-19 | 2     | 2026 |
 
+`fact_sales`
+| date_key | quantity |
+| -------- | -------- |
+| 20260218 | 5        |
+| 20260219 | 3        |
+
+The join is performed on `date_key`:<br>
+`fact_sales.date_key = dim_date.date_key`
+
+The Date/Time dimension enables **calendar-based analysis**. Dates are broken into components such as year, month, and day, while also including business-specific attributes like `FISCAL_YEAR` and flags such as `IS_WEEKEND` or `IS_BUSINESS_HOUR`. A similar approach is used for Time dimensions, which break down hours, minutes, and seconds and can include business-related flags.
+
+Implementing Date dimensions is done by pre-populating the dimension with several years worth of dates (past, current, and future).<br>
+The Time dimension is usually pre-populated depending on the grain:
+- 24 rows for hour grain
+- 1440 rows for minute grain
+- 86400 rows for second grain
+
+##### <h4>Degenerate Dimensions</h4>
+
+A degenerate dimension is a dimension key stored only in the fact table with no separate dimension table, usually used for identifiers like order numbers or invoice IDs that don’t have additional descriptive attributes.
+
+##### <h4>Signs of a Poorly Designed Dimension</h4>
+
+* **No surrogate key** – breaks Slowly Changing Dimension handling; ties warehouse to source-system changes.
+* **Too normalized** – Dimensions should be denormalized. Foreign keys to other lookup tables add unnecessary joins.
+* **Nullable columns** – lead to broken lookups and nulls in fact tables. Replace null with well-documented dummy values.
+* **Attributes that don’t belong together** – mix of unrelated concepts signals need for mini-dims or refactoring.
+* **Unclear or inconsistent naming** – makes the dimension hard to understand and use.
+
+![messy_dimension](images/messy_dimension.png)
+
+#### Star Schema Relationships
+
+In a star schema, fact tables usually have a **many-to-one relationship** with each dimension. This means that many rows in the fact table correspond to a single row in the dimension table. Each fact row stores foreign keys that point to dimension records, allowing multiple facts to share the same dimension attributes. 
+
+```
+                 dim_product                                      dim_date
+           +----------------+----------------+-------------+   +----------------+----------------+-------------+
+           | product_key(PK)| product_name   | category    |   | date_key (PK)  | full_date      | day_of_week |
+           +----------------+----------------+-------------+   +----------------+----------------+-------------+
+           | 101            | Widget A       | Widgets     |   | 20260218       | 2026-02-18     | Tuesday     |
+           | 102            | Widget B       | Widgets     |   | 20260219       | 2026-02-19     | Wednesday   |
+           +----------------+----------------+-------------+   +----------------+----------------+-------------+
+                    ^                                                      ^
+                    |                                                      |
+                    |                                                      |
+                    |                                                      |
+                    |                                                      |
+               +---------------------------------------------------------------+
+               |                         fact_sales                            |
+               +---------------------------------------------------------------+
+               | date_key (FK) | product_key (FK) | quantity                   |
+               +---------------------------------------------------------------+
+               | 20260218      | 101              | 5                          |
+               | 20260218      | 101              | 2                          |
+               | 20260218      | 102              | 3                          |
+               | 20260219      | 101              | 4                          |
+               +---------------------------------------------------------------+
+
+```
+
+There are, however, scenarios wheere a star schema need to handle many-to-many relationships, and this require a junction table connecting the fact to the dimension.
+
+#### Naming Conventions
+
+- Fact tables store measures and foreign keys. Prefix with `fact_` (e.g., `fact_sales`) or use a clear descriptive name (`sales`, `orders`). 
+- Dimension tables store descriptive attributes for an entity. Prefix with `dim_` (e.g., `dim_product`, `dim_customer`) or use a clear name (`product`, `customer`).
+- Consistency matters: Use the chosen convention consistently to make the schema easy to read and navigate.
 
 ### Denormalization
 
@@ -1244,7 +1354,30 @@ Two reasons to denormalize:
 1. **Reduce I/O time**
 2. Reduce the complexity of queries 
 
-Denormalization often involves combining data from multiple normalized tables into a single table or view, so that queries can read it directly without performing many joins.
+Denormalization often combines multiple normalized tables into a single table or view, so queries can read data directly without many joins. Repeating dimension attributes across rows is fine, but each fact row must represent exactly one event or measurement at its defined grain — duplicate rows will inflate totals and produce incorrect analytics. Dimension duplication is expected and safe, fact duplication is a logic error.
+
+**Denormalize a dimension attribute when:**
+- The attribute is mainly used for filtering or grouping<br>
+  The attribute frequently appears in WHERE clauses or GROUP BY operations, so keeping it in the same table reduces query complexity and improves performance.
+- The hierarchy is stable (City → State → Country)<br>
+  Relationships between hierarchy levels rarely change (for example, a city rarely moves to another state). Storing all levels together avoids unnecessary joins while not creating significant maintenance effort, since updates are uncommon.
+- The data is relatively small and changes infrequently<br>
+  Dimension tables are typically much smaller than fact tables. If attribute values change rarely, duplicating them across rows does not create meaningful storage or maintenance overhead.
+- Redundancy does not create conflicting meanings<br>
+  Repeating the attribute across rows does not risk inconsistent values or different interpretations of the same business concept.
+
+**Normalize a dimension attribute when:**
+- The attribute changes independently and frequently<br>
+  The attribute can change without the rest of the dimension changing (for example, supplier contact details changing independently of products). If you denormalize it, the same value is stored in many rows. When it changes, every row containing that value must be updated to keep data consistent. This increases the risk that some rows remain outdated due to partial loads, historical records, or ETL errors, leading to inconsistent reporting and making change management more complex, especially when historical tracking is required.
+
+- The attribute has many-to-many relationships<br>
+  A single attribute value relates to multiple entities, requiring a junction table to correctly represent relationships without duplication.
+
+- The structure is large and highly reusable across multiple dimensions<br>
+  The same dataset is used by multiple subject areas or dimensions. Keeping it separate avoids duplication and centralizes maintenance. For example, geography data might be used by both a Customer dimension and a Store dimension. If you denormalize it into each of these dimensions, you duplicate the entire geography structure multiple times which complicates updates and risks data integrity. If, however, geography is stored once in a dedicated Geography dimension, all other dimensions reference it.
+
+- Redundancy would cause update inconsistencies<br>
+  Storing the same attribute in multiple locations increases the chance that some rows are updated while others are not, leading to conflicting values and inaccurate reporting.
 
 
 
@@ -1258,7 +1391,4 @@ Denormalization often involves combining data from multiple normalized tables in
 
 
 
-
-
-
-
+https://www.thoughtspot.com/data-trends/data-modeling/dimensional-data-modeling

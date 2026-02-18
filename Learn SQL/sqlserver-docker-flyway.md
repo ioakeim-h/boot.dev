@@ -1,6 +1,6 @@
 # SQL Server + Docker + Flyway: A Practical Workflow
 
-This project provides a fully containerized development environment for SQL Server using Docker, integrated with Flyway for database migrations. Created as a support document for my [SQL Guide](Learn%20SQL.md).
+This project provides a fully containerized development environment for SQL Server using Docker, integrated with Flyway for database migrations.<br> This project was created as a support document for my [SQL Guide](Learn%20SQL.md).
 
 ## Setup
 
