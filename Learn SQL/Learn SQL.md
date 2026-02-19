@@ -66,6 +66,7 @@ Choose your topic from the list below
         - [Date and Time Dimensions](#date-and-time-dimensions)
         - [Degenerate Dimensions](#degenerate-dimensions)
         - [Signs of a Poorly Designed Dimension](#signs-of-a-poorly-designed-dimension)
+        - [Slowly Changing Dimensions](#slowly-changing-dimensions)
       - [Star Schema Relationships](#star-schema-relationships)
       - [Naming Conventions](#naming-conventions)
     - [Denormalization](#denormalization)
@@ -1308,6 +1309,40 @@ A degenerate dimension is a dimension key stored only in the fact table with no 
 
 ![messy_dimension](images/messy_dimension.png)
 
+##### <h4>Slowly Changing Dimensions</h4>
+
+Slowly Changing Dimensions (SCD) are changes that occur in descriptive attributes over time. 
+
+Imagine you are the data warehouse engineer for a packaging company tracking customer orders. One day, you learn that a customer has moved from Athens to London, and you need to update the City attribute in the customer dimension. However, if you simply overwrite the existing row, every past order associated with that customer will now appear as though it was placed from London. This distorts historical reporting and makes it impossible to answer questions like: "From which city was the order placed at the time of purchase?" Situations like this are what SCD addresses. 
+
+There are **3 main approaches for handling SCD**, commonly referred to as SCD types:
+
+1. **Type 1 — Overwrite (No History)**
+   
+    Overwrites the existing value. Use when historical tracking is not required.
+
+    Before: `CustomerID=1, City=Athens`<br>
+    After:  `CustomerID=1, City=London`
+
+2. **Type 2 — Add New Row (Full History)**
+
+    Inserts a new row for each change and tracks validity using dates (e.g., `StartDate`, `EndDate`) or flags (e.g., `IsCurrent`). Fact tables reference the surrogate key, not the natural key, so each transaction links to the correct version of the dimension. Use when full historical tracking is required, but be aware of increased storage requirements and join complexity.
+
+    ```
+    CustomerKey | CustomerID | City   | StartDate  | EndDate    | IsCurrent
+    1           | 1          | Athens | 2022-01-01 | 2023-05-01 | 0
+    2           | 1          | London | 2023-05-01 | NULL       | 1
+    ```
+
+3. **Type 3 — Add New Column (Limited History)**
+
+    Adds a column (e.g., `PreviousCity`) to store the previous value. Only limited history (usually one prior value) is tracked. Use when only a small number of changes need to be tracked.
+
+    ```
+    CustomerID | CurrentCity | PreviousCity
+    1          | London      | Athens
+    ```
+
 #### Star Schema Relationships
 
 In a star schema, fact tables usually have a **many-to-one relationship** with each dimension. This means that many rows in the fact table correspond to a single row in the dimension table. Each fact row stores foreign keys that point to dimension records, allowing multiple facts to share the same dimension attributes. 
@@ -1338,7 +1373,7 @@ In a star schema, fact tables usually have a **many-to-one relationship** with e
 
 ```
 
-There are, however, scenarios wheere a star schema need to handle many-to-many relationships, and this require a junction table connecting the fact to the dimension.
+There are, however, scenarios wheere a star schema needs to handle many-to-many relationships, and this requires a junction table connecting the fact to the dimension.
 
 #### Naming Conventions
 
