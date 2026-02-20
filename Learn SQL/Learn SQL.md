@@ -36,7 +36,7 @@ Choose your topic from the list below
 - [Constraints](#constraints)
   - [Primary \& Foreign Keys](#primary--foreign-keys)
 - [Table Relationships](#table-relationships)
-- [Database Architectures](#database-architectures)
+- [Database Systems](#database-systems)
   - [OLTP](#oltp)
     - [ACID Transactions in SQL Server](#acid-transactions-in-sql-server)
       - [Atomic: Transaction Modes](#atomic-transaction-modes)
@@ -59,8 +59,10 @@ Choose your topic from the list below
     - [Dimensional Modelling](#dimensional-modelling)
       - [Grain](#grain)
         - [Choosing Grain](#choosing-grain)
-        - [Articulate and Validate Grain](#articulate-and-validate-grain)
+        - [Articulate Grain](#articulate-grain)
+        - [Validate Grain](#validate-grain)
       - [Designing Fact Tables](#designing-fact-tables)
+        - [Aggregation Logic](#aggregation-logic)
         - [Signs of a Poorly Designed Fact Table](#signs-of-a-poorly-designed-fact-table)
       - [Designing Dimensions](#designing-dimensions)
         - [Hierarchies Enable Drill-down](#hierarchies-enable-drill-down)
@@ -73,6 +75,21 @@ Choose your topic from the list below
       - [Star Schema Relationships](#star-schema-relationships)
       - [Design Trade-offs](#design-trade-offs)
     - [Denormalization](#denormalization)
+- [Data Modelling Workflows](#data-modelling-workflows)
+  - [Conceptual](#conceptual)
+    - [Choose a System](#choose-a-system)
+    - [Visualize (High-Level)](#visualize-high-level)
+  - [Logical](#logical)
+    - [OLTP Workflow](#oltp-workflow)
+    - [OLAP Workflow](#olap-workflow)
+    - [Visualize (Low-Level)](#visualize-low-level)
+    - [Documentation](#documentation)
+  - [Physical](#physical)
+    - [OLTP](#oltp-1)
+      - [Workflow](#workflow)
+      - [Constraints vs. Performance](#constraints-vs-performance)
+      - [Surrogate vs. Natural Keys](#surrogate-vs-natural-keys)
+    - [Test Queries](#test-queries)
 
 ---
 
@@ -730,7 +747,7 @@ A relationship between tables assumes that one of these tables has a foreign key
   );
   ```
 
-# Database Architectures
+# Database Systems
 
 Databases are designed to serve different needs: transactional operations (OLTP; Online Transaction Processing) or analytical insights (OLAP; Online Analytical Processing). OLTP systems handle day-to-day transactions with fast inserts, updates, and deletes, using highly normalized schemas to maintain data integrity. OLAP systems, in contrast, are optimized for querying, reporting, and analytics, often using dimensional models such as star or snowflake schemas to organize historical and aggregated data efficiently.
 
@@ -1227,7 +1244,7 @@ Imagine you run a pizza shop and want to store sales data. You have several choi
 
 Choosing the grain is not about how many dimension fields a row contains, but about the level of aggregation each row represents; dimensions naturally follow from that decision — not the other way around. Grain defines the level of measurement, while dimensions provide the context needed to interpret that measurement. That’s why, in modeling, we define grain before adding measures or columns.
 
-##### <h4>Articulate and Validate Grain</h4>
+##### <h4>Articulate Grain</h4>
 
 **Conceptual template for describing grain:** “One row per [`business event or entity`] per [`dimension1`] per [`dimension2`] … per [`dimensionN`].”
 - [`business event or entity`] → the primary fact being measured (e.g., a sale, a click, an inventory snapshot).
@@ -1236,10 +1253,11 @@ Choosing the grain is not about how many dimension fields a row contains, but ab
 **Example:** One row per sale per product per store per day<br>
 Each row represents a single combination of `sale`, `product`, `store`, and `day`.
 
-**Validate your grain by asking this question:** "If I have two rows with the same `sale`, `product`, `store`, and `day`, can I tell them apart?"
+##### <h4>Validate Grain</h4>
+
+**Ask yourself:** "If I have two rows with the same `sale`, `product`, `store`, and `day`, can I tell them apart?"
 - If No: Your grain is too broad. You need another "per" (e.g., per Transaction ID).
 - If Yes: Your grain is perfectly defined. Every combination of those four things results in exactly one unique row.
-
 
 #### Designing Fact Tables
 
@@ -1249,7 +1267,39 @@ A fact table represents a measurable business process:
 * Contains foreign keys—typically surrogate keys—linking to dimension tables.
 * May store source system natural keys to trace records back to the originating operational system.
 
-Fact tables group measurements that share the same grain. A new fact table is created when the level of detail or the business event changes, not when a new measure is added. Furthermore, for each measure added to the fact table, it is good practice to verify which aggregation types are valid and to document how the measure should be used (e.g., whether it can be summed or averaged across all, some, or no dimensions.). Prioritize [additive measures](https://robbobroy224.medium.com/different-type-of-facts-in-data-modelling-additive-semi-additive-non-additive-f029c2900790) because they can be safely aggregated across all dimensions and minimize the risk of incorrect calculations.
+Fact tables group measurements that share the same grain. A new fact table is created when the level of detail or the business event changes, not when a new measure is added. 
+
+##### <h4>Aggregation Logic</h4>
+
+For each measure added to a fact table, you must verify and document which aggregation types (e.g., `SUM`, `AVERAGE`) are valid. If you don't define the aggregation logic, you risk building a table that is physically missing the columns required for accurate reporting.
+
+As a database engineer, you don’t actually enforce aggregation logic in the database itself. Your concern is to store the right measures in the fact table with the right type/precision so that downstream analysts can aggregate them correctly. What matters is knowing the nature of the measure ([additive, semi-additive, non-additive]((https://robbobroy224.medium.com/different-type-of-facts-in-data-modelling-additive-semi-additive-non-additive-f029c2900790))) so you don’t store it in a way that makes correct aggregation impossible. Knowing the nature of the measure influences how you design the table and the surrounding structures.
+
+1. **Additive Measures**
+  - Can be summed across all dimensions.
+  - Nature: Values that represent a "flow" or total quantity (e.g., Revenue, Quantity Sold).
+  - Storage: Standard numeric type (INT, BIGINT, DECIMAL).
+  - Design consideration: No special handling needed — just ensure the data type is precise enough for summing large volumes.
+
+2. **Semi-Additive Measures**
+  - Can be summed across some dimensions, but not all (often `Time` is the restricted dimension).
+  - Nature: Values that represent a "state" or "snapshot" at a point in time (e.g., Inventory Balance, Headcount).
+  - Storage: Still stored as a standard numeric type.
+  - Design Impact: 
+    - Requires Time Context: You must include a Date or Timestamp foreign key to prevent analysts from summing values across time (e.g., summing daily balances).
+      - Why: Without a precise time anchor, the measure is "homeless." The timestamp acts as a constraint that forces analysts to filter by a specific point in time, preventing them from accidentally summing Monday's balance with Tuesday's balance and creating "phantom" data.
+    - Snapshots: You may need to engineer a "Periodic Snapshot Fact Table" specifically to hold these values.
+      - Why: Transaction tables only record changes. If no books are borrowed for a week, a transaction table is empty, but the "state" of the library still exists. An engineered snapshot table ensures there is evidence of the system's state even when no activity occurs.
+
+3. **Non-Additive Measures**
+  - Cannot be summed meaningfully.
+  - Nature: Ratios, percentages, or temperatures that cannot be summed meaningfully (e.g., Profit Margin %, Unit Price).
+  - Storage: Standard numeric type, sometimes smaller precision if only used for reporting.
+  - Design Impact: 
+    - The Component Rule: Do not just store the percentage. You must store the numerator and denominator (e.g., total_profit and total_cost) as separate columns.
+      - Why: This allows the analytical engine to calculate a weighted average across any dimension, which is the only way to maintain mathematical "proof" in the final report.
+
+For semi-additive or non-additive measures, additional columns or metadata often accompany the raw measure to preserve analytical correctness. That said, **prioritize additive measures** because they can be safely aggregated across all dimensions and minimize the risk of incorrect calculations.
 
 ##### <h4>Signs of a Poorly Designed Fact Table</h4>
 
@@ -1457,6 +1507,188 @@ Denormalization often combines multiple normalized tables into a single table or
 - Redundancy would cause update inconsistencies<br>
   Storing the same attribute in multiple locations increases the chance that some rows are updated while others are not, leading to conflicting values and inaccurate reporting.
 
+# Data Modelling Workflows
+
+Data modelling occurs across **three stages**
+
+1. Conceptual = big picture
+   
+    ```
+    Conceptual schemas offer a big-picture view of what the system will contain, how it will be organized, and which business rules are involved. 
+    Conceptual models are usually created as part of the process of gathering initial project requirements.
+    ```
+
+2. Logical = detailed design
+   
+    ```
+    Logical database schemas are less abstract, compared to conceptual schemas. 
+    They clearly define schema objects with information, such as table names, field names, entity relationships, and integrity constraints — i.e. any rules that govern the database. 
+    However, they do not typically include any technical requirements.
+    ```
+
+3. Physical = actual implementation
+
+    ```
+    Physical database schemas provide the technical information that the logical database schema type lacks in addition to the contextual information, such as table names, field names, entity relationships, et cetera. 
+    That is, it also includes the syntax that will be used to create these data structures within disk storage.
+    ```
+
+The entire idea is that the physical database is built after the blueprint is validated, so you don’t “dig into construction” before knowing what works. By modelling first, you spot design flaws early, decide on normalization vs denormalization, plan for query patterns and reporting needs, and avoid costly changes later.
+
+## Conceptual
+
+### Choose a System
+
+The conceptual stage is usually where we decide the database system, whether it will be transactional or analytical.
+- Go OLTP if the system runs daily operations — many users creating or updating individual records, requiring fast, reliable transactions (orders, payments, bookings, user actions).
+- Go OLAP if the system is mainly for analysis — reading large amounts of historical data, aggregations, reports, or dashboards.
+
+### Visualize (High-Level)
+
+Once we’ve picked the database system that makes the most sense for what we’re building, the next step is to think through the actual shape of our data — what we’re storing, how it’s organized, and the business rules that tie everything together. To get there, we really just need to answer two simple questions:
+1. What are the key concepts in our business?
+2. How do they relate to one another?
+
+These key concepts ultimately become the entities in our database. But how do we know when something qualifies as an entity? In general, an entity should meet three criteria:
+
+**Identifying an Entity**
+
+1. It represents a person, place, thing, event, or concept <br>
+*Example:* A Customer is a person your business interacts with.
+
+2. It can be uniquely identified <br>
+*Example:* Each Order has a unique order number that distinguishes it from all others.
+
+3. It has attributes that describe it <br>
+*Example:* A Product has attributes like name, price, and SKU
+
+From here, the entities we’ve uncovered, along with the relationships between them, can be laid out visually in an Entity Relationship Diagram (ERD). At the conceptual stage, an ERD captures only the entities and their relationships, which are typically shown using [Crow’s Foot notation](https://www.red-gate.com/blog/crow-s-foot-notation). There are plenty of tools that can help you sketch ERDs:
+- Simple, quick, free, but limited relationship types: [Visual Paradigm](https://online.visual-paradigm.com/diagrams/solutions/free-erd-tool/)
+- Simple enough, free, more features, automatically generates SQL code from your ERD: [drawDB](https://www.drawdb.app/)
+
+**ERD Example: Library Borrowing**
+
+Imagine a tiny library system with just four core concepts: Book, Author, Member and Loan <br>
+From these, we can define the relationships:
+- A Member can have zero or many Loans.
+- A Book can appear in zero or many Loans.
+- Each Loan links exactly one Member to exactly one Book.
+- A Book can have one or many Authors (not supported by Visual Paradigm), and an Author can write zero or many Books.  
+
+![conceptual data modelling](images/conceptual_data_modelling_example.png)
+
+**Loan is the mediator between `Member` and `Book`.** Although a member can be associated with a book, drawing a direct relationship between `Member` and `Book` would incorrectly suggest an inherent connection between them outside of borrowing.  To reflect the real‑world process, members are linked to books only through the `Loan` entity, which represents the borrowing event itself.
+
+## Logical
+
+By now we’ve figured out the main entities and how they relate. That gives us the big picture. Next, we start adding the structure and detail that turns this into something a developer can actually build. This is where we shift into the logical stage and shape the model into a clearer, more concrete blueprint.
+
+Several of the procedures in the logical stage overlap with what we did in the conceptual stage, so it might seem like the logical model simply adds detail to the structure we already identified. In reality, that’s not how it works. In OLTP, normalization can split entities into multiple tables and introduce new relationships. In OLAP, the entities we identified earlier must be reorganized into fact and dimension tables and fitted into schemas such as star or snowflake. So yes, the logical stage adds detail — but it also forces us to re‑iterate on the structure we defined conceptually.
+
+### OLTP Workflow
+
+| Step                             | Objective                                             | Examples / Notes                                                                                                                                                      |
+| -------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Identify Entities             | Determine the core business objects.                    | • Nouns like Customers, Orders, Payments.<br>• Distinguish between master data (Products) and transactional data (Orders).                                            |
+| 2. Define Attributes & Keys      | List essential fields and establish unique identifiers. | • Use surrogate keys (UUIDs, BigInt) for stability; avoid business values as keys.<br>• Keep attributes granular (e.g., `first_name`, `last_name` instead of `name`). |
+| 3. Normalize to 3NF              | Reduce redundancy to ensure data integrity.             | • Split repeating groups into separate tables (e.g., Addresses).<br>• Goal: each piece of data is stored in exactly one place to prevent update anomalies.            |
+| 4. Define Access Patterns        | Map how the application will read and write data.       | • Identify high-frequency “hot” paths.<br>• Ignoring join frequency can lead to future performance bottlenecks.<br>• The way you access data often dictates whether your normalized design (logic) is actually viable in production.                                                       |
+| 5. Map Relationships             | Specify connectivity, cardinality, and optionality.     | • A `Customer` can have many `Orders` (one‑to‑many).<br>• `Products` and `Orders` form a many‑to‑many relationship via `OrderItems`.<br>• Identify whether relationships are optional (e.g., a `Customer` may have zero `Orders`) or mandatory (an `Order` must belong to a `Customer`).                        |
+| 6. Define Integrity Rules        | Set constraints to guarantee valid, consistent data.    | • NOT NULL, UNIQUE, and FOREIGN KEY constraints.<br>• Use CHECK constraints for business logic (e.g., `price > 0`).                                                   |
+| 7. Define Transaction Boundaries | Determine atomic operations (ACID).                     | • Group writes that must “all fail or all succeed” (e.g., debiting inventory while creating an order).<br>• Keep boundaries narrow to prevent deadlocks.              |
+| 8. Strategy for Concurrency      | Decide how to handle simultaneous updates.              | • Optimistic Locking: version columns for high-concurrency apps.<br>• Pessimistic Locking: for high-risk, low-latency operations (e.g., financial trades).<br>• An OLTP system that doesn't define how it handles two users clicking "Buy" at the exact same millisecond is incomplete.            |
+
+
+### OLAP Workflow
+
+| Step                                   | Objective                                                            | Examples / Notes                                                                                                                                                                                                                                                           |
+| -------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Identify Business Processes (Facts) | Determine the "events" worth measuring (Sales, Returns).             | • Only tables that record measurable events with quantitative data should be considered facts.                                                                                                                                                                             |
+| 2. Declare the Grain                   | Define exactly what one row in the fact table represents.            | • Once you aggregate data (e.g., "Daily Sales" instead of "Per Transaction"), the raw evidence is lost forever. Always aim for the finest grain possible.<br>• Grain is the most critical OLAP decision: too fine → massive tables; too coarse → loss of analytical value. |
+| 3. Identify Dimensions                 | Define the "Who, What, Where, When" context.                         | • Dimensions should be "conformed" — meaning a Product dimension should look the same to the Sales fact as it does to the Inventory fact.                                                                                                                                  |
+| 4. Design the Schema Structure         | Choose between Star, Snowflake, or One Big Table (OBT).              | • Star schema: fact tables + denormalized dimensions (most common).<br>• Snowflake schema: dimensions normalized into sub‑dimensions.<br>• [OBT](https://www.fivetran.com/blog/star-schema-vs-obt): often used in modern columnar engines for performance.                 |
+| 5. Map Measures & Attributes           | Distinguish between Additive, Semi-Additive, and Non-Additive facts. | • Ensure the columns you store are actually capable of producing the correct math later.<br>• You can't sum "Discount Rate," but you can sum "Discount Amount." Miscalculating these leads to massive misinformation in reports.<br>• Sets the the rules for Step 8.                                           |
+| 6. Establish Relationships             | Connect facts to dimensions via keys.                                | • Use Surrogate Keys for dimensions.<br>• Fact tables hold Foreign Keys; relationships are almost always Many-to-One.                                                                                                                                                      |
+| 7. Handle Time & Drift (SCDs)          | Decide how to track history (Slowly Changing Dimensions).            | • Type 2 (History) is standard, but it creates "Evidence Bloat." Only track changes for attributes that actually matter for historical analysis.                                                                                                                           |
+| 8. Define Aggregation Strategy         | Plan for Materialized Views or OLAP Cubes.                           | • Pre-calculating totals speeds up dashboards but adds a "latency tax."                                                                                                                          |
+
+
+
+
+
+
+
+
+
+
+
+### Visualize (Low-Level)
+
+At the logical stage, the model stops being purely descriptive and starts becoming actionable. This is where business entities turn into actual tables that a database can implement. <br>
+To do that, we answer concrete design questions such as:
+- What tables do we need?
+- What columns belong in each table?
+- What data type should each column use?
+- Which column uniquely identifies each row (the primary key)?
+- How do we connect tables using keys and relationships?
+
+**Constraints play a key role here** — they ensure the logical model captures real business rules, not just structural relationships. 
+
+Also, this is the point where we should add any **junction tables**. Relational databases cannot store a many‑to‑many relationship directly, so we must break the many‑to‑many into two one‑to‑many relationships using a junction table.
+
+**ERD Example: Library Borrowing (Extended)**
+
+We've added columns, constraints, data types and a junction table. By reading the ERD, we can see that:
+- A member can have many loans (linked via member_id)
+- A book can be in many loans over time
+- A book can appear in many BookAuthor rows
+- An Author can appear in many BookAuthor rows
+- Each BookAuthor row links one Book to one Author
+
+![logical data modelling example](images/logical_data_modelling_example.png)
+
+**Why isn’t `Loan` → `Book` a many‑to‑one?** Because a loan represents one borrowing event for one book. If we allowed a single loan to contain multiple books, then returning one book but not the others becomes messy:
+- due dates might differ
+- fines might differ
+- availability tracking becomes harder
+
+So the simplest, cleanest model is: `One loan = one book borrowed by one member at one time` <br>
+If someone borrows 3 books, we create 3 loan rows.
+
+This keeps the model consistent and avoids hidden complexity.
+
+### Documentation
+
+The logical model is strengthened by thorough documentation, which provides the level of detail needed for accurate implementation. Artifacts such as a data dictionary, a business glossary, and a relationship matrix help clarify the structure, meaning, and interactions within the data model.
+
+**Data Dictionary: a structured description of every table and column** 
+- Table name
+- Column name
+- Data type (and length)
+- Nullability requirements
+- Business descritpion in plain language
+- Allowed values
+- Example values
+
+![data dictionary example](images/data%20dictionary.png)
+
+**Business Rule Catalog: what the business allows and forbids**
+- Rule description
+- Tables involved
+- Columns involved
+- How the rule is enforced
+
+![business rule catalog example](images/business%20rule%20catalog.png)
+
+**Relationshp Matrix: a description of relationships**
+- Parent table
+- Parent key
+- Child table
+- Child table's foreign key
+- Cardinality
+- Business meaning of the relationship
+
+![relationship matrix example](images/relationship%20matrix.png)
 
 
 
@@ -1469,4 +1701,45 @@ Denormalization often combines multiple normalized tables into a single table or
 
 
 
-https://www.thoughtspot.com/data-trends/data-modeling/dimensional-data-modeling
+
+
+## Physical
+
+The physical stage is where we translate our logical model into a specific database engine (e.g., PostgreSQL, MySQL). Here, we make trade-offs between storage space, write speed, and read latency. We no longer care just about what the data is, but how it is physically laid out on the disk. In OLTP, every millisecond counts because these systems handle "live" traffic.
+
+
+### OLTP 
+
+#### Workflow
+
+| Step                     | Description                                                                 | Examples / Notes                                                                                                                                                               |
+| ------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Select Data Types**    | Choose the most efficient storage format for every attribute.               | • Use `INT` or `BIGINT` for IDs instead of `TEXT`.<br>• Use `DECIMAL` for currency to avoid floating-point errors (never use `FLOAT` for money → rounding errors).                               |
+| **Indexing Strategy**    | Create B-Tree indexes to speed up the "Access Patterns" identified earlier. | • Always index Foreign Keys to speed up joins.<br>• Every index slows down INSERT and UPDATE operations — only index what you query frequently.                                |
+| **Clustering & Sorting** | Define the physical order of data on the disk.                              | • In engines like MySQL/InnoDB, the Primary Key determines physical order.<br>• Using a [time-sorted ID](https://medium.com/@zahrazolfaghari00/why-random-primary-keys-hurt-your-database-performance-understanding-clustered-vs-secondary-58a53a8cd5e7) (like UUID v7) prevents fragmentation and page splits.                  |
+| **Partitioning**         | Break massive tables into smaller, manageable physical chunks.              | • [Partition](https://medium.com/@iamthatsoftwareguy/a-beginners-guide-to-database-partitioning-cb21af515876) a `Transactions` table by `created_at` month.<br>• This allows the engine to "prune" unnecessary data, drastically increasing speed.                               |
+| **Denormalization**      | Selectively re-introduce redundancy for performance.                        | • Store frequently calculated values (e.g., "Total Order Price") as static columns instead of recalculating.<br>• Requires triggers or application logic to keep data in sync. |
+
+
+#### Constraints vs. Performance
+
+There is plenty of evidence that enforcing rules at the database level (Foreign Keys, Check Constraints) is the safest way to prevent "garbage data." However, in extreme high-scale OLTP environments, some teams move these rules to the Application Layer to reduce database CPU load.
+
+**Recommendation**: Start with full database enforcement. Only remove constraints if you have proof (through load testing) that the database is the bottleneck.
+
+#### Surrogate vs. Natural Keys
+
+To visualize why we favor Surrogate keys in the Physical stage, consider this comparison:
+
+| Feature        | Surrogate Key (UUID v7 / Serial) | Natural Key (Email / SSN)  |
+| -------------- | -------------------------------- | -------------------------- |
+| **Size**       | Small (4–16 bytes)               | Large (Varies)             |
+| **Join Speed** | Fast (Integer comparison)        | Slower (String comparison) |
+| **Stability**  | 100% Immutable                   | Subject to change/updates  |
+| **Privacy**    | High (Anonymous)                 | Low (Exposes PII in FKs)   |
+
+
+
+### Test Queries
+
+Test queries to ensure an accurate model
