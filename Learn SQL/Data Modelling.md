@@ -168,3 +168,14 @@ The logical model is strengthened by thorough documentation, which provides the 
 - Business meaning of the relationship
 
 ![relationship matrix example](images/relationship%20matrix.png)
+
+
+
+
+
+
+
+
+
+
+OLAP workflow additions: (1) Identify conformed dimensions, (2) think abou SCD upfront, (3) Test queries to ensure an accurate model

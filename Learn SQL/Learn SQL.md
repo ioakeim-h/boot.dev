@@ -59,6 +59,7 @@ Choose your topic from the list below
     - [Dimensional Modelling](#dimensional-modelling)
       - [Grain](#grain)
         - [Choosing Grain](#choosing-grain)
+        - [Articulate and Validate Grain](#articulate-and-validate-grain)
       - [Designing Fact Tables](#designing-fact-tables)
         - [Signs of a Poorly Designed Fact Table](#signs-of-a-poorly-designed-fact-table)
       - [Designing Dimensions](#designing-dimensions)
@@ -67,8 +68,10 @@ Choose your topic from the list below
         - [Degenerate Dimensions](#degenerate-dimensions)
         - [Signs of a Poorly Designed Dimension](#signs-of-a-poorly-designed-dimension)
         - [Slowly Changing Dimensions](#slowly-changing-dimensions)
-      - [Star Schema Relationships](#star-schema-relationships)
+        - [Conformed Dimensions](#conformed-dimensions)
       - [Naming Conventions](#naming-conventions)
+      - [Star Schema Relationships](#star-schema-relationships)
+      - [Design Trade-offs](#design-trade-offs)
     - [Denormalization](#denormalization)
 
 ---
@@ -1222,7 +1225,20 @@ Imagine you run a pizza shop and want to store sales data. You have several choi
 | 1002     | Bob      | 2026-02-16 | Veggie     | Cheese     | 100g           |
 | 1002     | Bob      | 2026-02-16 | Veggie     | Peppers    | 50g            |
 
-Choosing the grain is not about how many dimension fields a row contains, but about the level of aggregation each row represents; dimensions naturally follow from that decision — not the other way around. **Grain defines the level of measurement**, while **dimensions provide the context needed to interpret that measurement**. That’s why, in modeling, we define grain before adding measures or columns.
+Choosing the grain is not about how many dimension fields a row contains, but about the level of aggregation each row represents; dimensions naturally follow from that decision — not the other way around. Grain defines the level of measurement, while dimensions provide the context needed to interpret that measurement. That’s why, in modeling, we define grain before adding measures or columns.
+
+##### <h4>Articulate and Validate Grain</h4>
+
+**Conceptual template for describing grain:** “One row per [`business event or entity`] per [`dimension1`] per [`dimension2`] … per [`dimensionN`].”
+- [`business event or entity`] → the primary fact being measured (e.g., a sale, a click, an inventory snapshot).
+- [`dimension1` … `dimensionN`] → all the dimensions that uniquely identify a single row.
+
+**Example:** One row per sale per product per store per day<br>
+Each row represents a single combination of `sale`, `product`, `store`, and `day`.
+
+**Validate your grain by asking this question:** "If I have two rows with the same `sale`, `product`, `store`, and `day`, can I tell them apart?"
+- If No: Your grain is too broad. You need another "per" (e.g., per Transaction ID).
+- If Yes: Your grain is perfectly defined. Every combination of those four things results in exactly one unique row.
 
 
 #### Designing Fact Tables
@@ -1233,7 +1249,7 @@ A fact table represents a measurable business process:
 * Contains foreign keys—typically surrogate keys—linking to dimension tables.
 * May store source system natural keys to trace records back to the originating operational system.
 
-Fact tables group measurements that share the same grain. A new fact table is created when the level of detail or the business event changes, not when a new measure is added.
+Fact tables group measurements that share the same grain. A new fact table is created when the level of detail or the business event changes, not when a new measure is added. Furthermore, for each measure added to the fact table, it is good practice to verify which aggregation types are valid and to document how the measure should be used (e.g., whether it can be summed or averaged across all, some, or no dimensions.). Prioritize [additive measures](https://robbobroy224.medium.com/different-type-of-facts-in-data-modelling-additive-semi-additive-non-additive-f029c2900790) because they can be safely aggregated across all dimensions and minimize the risk of incorrect calculations.
 
 ##### <h4>Signs of a Poorly Designed Fact Table</h4>
 
@@ -1319,19 +1335,19 @@ There are **3 main approaches for handling SCD**, commonly referred to as SCD ty
 
 1. **Type 1 — Overwrite (No History)**
    
-    Overwrites the existing value. Use when historical tracking is not required.
+    Overwrites the existing value using `UPDATE`. Use when historical tracking is not required.
 
     Before: `CustomerID=1, City=Athens`<br>
     After:  `CustomerID=1, City=London`
 
 2. **Type 2 — Add New Row (Full History)**
 
-    Inserts a new row for each change and tracks validity using dates (e.g., `StartDate`, `EndDate`) or flags (e.g., `IsCurrent`). Fact tables reference the surrogate key, not the natural key, so each transaction links to the correct version of the dimension. Use when full historical tracking is required, but be aware of increased storage requirements and join complexity.
+    Inserts a new row for each change and tracks validity using dates (e.g., `StartDate`, `EndDate`) or flags (e.g., `IsCurrent`). Fact tables reference the surrogate key (e.g., `CustomerKey`), not the natural key, so each transaction links to the correct version of the dimension. Use when full historical tracking is required, but be aware of increased storage requirements and join complexity.
 
     ```
     CustomerKey | CustomerID | City   | StartDate  | EndDate    | IsCurrent
     1           | 1          | Athens | 2022-01-01 | 2023-05-01 | 0
-    2           | 1          | London | 2023-05-01 | NULL       | 1
+    2           | 1          | London | 2023-05-01 | 9999-12-31 | 1
     ```
 
 3. **Type 3 — Add New Column (Limited History)**
@@ -1343,6 +1359,32 @@ There are **3 main approaches for handling SCD**, commonly referred to as SCD ty
     1          | London      | Athens
     ```
 
+##### <h4>Conformed Dimensions</h4>
+
+Conformed dimensions are dimension tables shared across multiple fact tables. They allow different fact tables to be joined on the same dimensions, enabling a unified view and combined analysis. They provide:
+* **Consistency across fact tables** – repeating the same dimension across multiple fact tables can lead to mismatched data. Conformed dimensions ensure that all fact tables interpret the same attributes in the same way.
+* **Reduced duplication** – only a single dimension table needs to be maintained, rather than separate versions for each fact table.
+
+Here is a text-based visualization of conformed dimensions connecting two fact tables:
+```
+       [ SALES FACT ]         [ CONFORMED DIMENSIONS ]       [ INVENTORY FACT ]
+       ______________         ______________________         __________________
+      | Sales_ID (PK) |       |      DATE DIM       |       | Inventory_ID (PK) |
+      | Qty_Sold      | <---> | Date_Key (PK), Date | <---> | Qty_On_Hand       |
+      | Total_Price   |       |_____________________|       | Last_Stock_Date   |
+      | Date_Key (FK) |       _______|______________        | Date_Key (FK)     |
+      | Prod_Key (FK) | <---> |     PRODUCT DIM     | <---> | Prod_Key (FK)     |
+      |_______________|       | Prod_Key (PK), Name |       |___________________|
+                              |_____________________|       
+```
+Both the `SALES FACT` and `INVENTORY FACT` tables reference the same `DATE` and `PRODUCT` dimensions using surrogate keys (`Date_Key`, `Prod_Key`). These surrogate keys ensure fact tables link to the correct dimension rows, support slowly changing dimensions, and decouple the warehouse from changes in source system keys. 
+
+#### Naming Conventions
+
+- Fact tables store measures and foreign keys. Prefix with `fact_` (e.g., `fact_sales`) or use a clear descriptive name (`sales`, `orders`). 
+- Dimension tables store descriptive attributes for an entity. Prefix with `dim_` (e.g., `dim_product`, `dim_customer`) or use a clear name (`product`, `customer`).
+- Consistency matters: Use the chosen convention consistently to make the schema easy to read and navigate.
+  
 #### Star Schema Relationships
 
 In a star schema, fact tables usually have a **many-to-one relationship** with each dimension. This means that many rows in the fact table correspond to a single row in the dimension table. Each fact row stores foreign keys that point to dimension records, allowing multiple facts to share the same dimension attributes. 
@@ -1373,13 +1415,14 @@ In a star schema, fact tables usually have a **many-to-one relationship** with e
 
 ```
 
-There are, however, scenarios wheere a star schema needs to handle many-to-many relationships, and this requires a junction table connecting the fact to the dimension.
+There are, however, scenarios where a star schema needs to handle many-to-many relationships, and this requires a junction table connecting the fact to the dimension.
 
-#### Naming Conventions
+#### Design Trade-offs
 
-- Fact tables store measures and foreign keys. Prefix with `fact_` (e.g., `fact_sales`) or use a clear descriptive name (`sales`, `orders`). 
-- Dimension tables store descriptive attributes for an entity. Prefix with `dim_` (e.g., `dim_product`, `dim_customer`) or use a clear name (`product`, `customer`).
-- Consistency matters: Use the chosen convention consistently to make the schema easy to read and navigate.
+When creating your dimensional model you will run into common performanace and design trade-offs:
+1. Decide whether you want to do a star schema or a snowflake schema. Rule: keep it to a star schema (its simpler) until the requirements demand a snowflake schema.
+2. Decide whether your dimensional model should include only core measures - letting end users create additional measures in their analytical tools (e.g., Power BI) - or whether it should contain as many precalculated measures and aggregations as possible.
+3. Decide whether to add attributes in existing dimensions or whether you should create new dimension tables. Rule: first check if an attribute naturally belongs in an existing dimension to keep the model simple.
 
 ### Denormalization
 
