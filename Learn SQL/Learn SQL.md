@@ -35,6 +35,7 @@ Choose your topic from the list below
     - [Store Backup to a Volume](#store-backup-to-a-volume)
 - [Constraints](#constraints)
   - [Primary \& Foreign Keys](#primary--foreign-keys)
+- [Performance (under construction)](#performance-under-construction)
 - [Table Relationships](#table-relationships)
 - [Database Systems](#database-systems)
   - [OLTP](#oltp)
@@ -58,8 +59,8 @@ Choose your topic from the list below
   - [OLAP](#olap)
     - [Dimensional Modelling](#dimensional-modelling)
       - [Grain](#grain)
-        - [Choosing Grain](#choosing-grain)
         - [Articulate Grain](#articulate-grain)
+        - [Choosing Grain](#choosing-grain)
         - [Validate Grain](#validate-grain)
       - [Designing Fact Tables](#designing-fact-tables)
         - [Aggregation Logic](#aggregation-logic)
@@ -85,10 +86,17 @@ Choose your topic from the list below
     - [Visualize (Low-Level)](#visualize-low-level)
     - [Documentation](#documentation)
   - [Physical](#physical)
+      - [Choose a Storage Engine](#choose-a-storage-engine)
     - [OLTP](#oltp-1)
       - [Workflow](#workflow)
-      - [Constraints vs. Performance](#constraints-vs-performance)
-      - [Surrogate vs. Natural Keys](#surrogate-vs-natural-keys)
+        - [Constraints vs. Performance](#constraints-vs-performance)
+        - [Surrogate vs. Natural Keys](#surrogate-vs-natural-keys)
+    - [OLAP (under construction)](#olap-under-construction)
+      - [Workflow](#workflow-1)
+      - [Compression and Encoding](#compression-and-encoding)
+      - [Physical Sorting (The "Cluster" Key)](#physical-sorting-the-cluster-key)
+      - [Projections and Materialized Views](#projections-and-materialized-views)
+      - [Critical Check](#critical-check)
     - [Test Queries](#test-queries)
 
 ---
@@ -684,8 +692,31 @@ CREATE TABLE books (
 
 
 
+# Performance (under construction)
+
+An index is a data structure that makes finding rows faster. Without an index, the database can only use a table scan: Scan every row → check condition → return matches. With an index, the database can jump directly to the matching rows, making a huge difference in read performance. 
+
+There are two types of indexes:
+1. Clustered
+2. Non-clustered
 
 
+
+Most relational databases use a B-Tree structure. It narrows the search space quickly. Instead of checking N rows, it does something closer to log₂(N) comparisons. 
+
+
+**Indexes optimize reads at the cost of write performance:** indexes are primarily for speeding up reads, but they affect writes (INSERT, UPDATE, DELETE) too. When a row is inserted during a write operation, the database must insert entries into every index. If the table has 5 indexes, the DB updates 5 index structures.
+
+| Operation | Effect of Index                       |
+| --------- | ------------------------------------- |
+| SELECT    | Faster                                |
+| INSERT    | Slower                                |
+| UPDATE    | Slower (especially if indexed column) |
+| DELETE    | Slower                                |
+
+
+- OLTP systems → careful indexing
+- Data warehouses / analytics → heavy indexing
 
 
 
@@ -1188,6 +1219,15 @@ Both show the same type of measurement at different levels of aggregation. Movin
   
 The data exists at different zoom levels. Grain is the zoom level you choose.
 
+##### <h4>Articulate Grain</h4>
+
+**Conceptual template for describing grain:** “One row per [`business event or entity`] per [`dimension1`] per [`dimension2`] … per [`dimensionN`].”
+- [`business event or entity`] → the primary fact being measured (e.g., a sale, a click, an inventory snapshot).
+- [`dimension1` … `dimensionN`] → all the dimensions that uniquely identify a single row.
+
+**Example:** One row per sale per product per store per day<br>
+Each row represents a single combination of `sale`, `product`, `store`, and `day`.
+
 ##### <h4>Choosing Grain</h4>
 
 Grain ultimately determines how powerful or limited your analytics will be. It also dictates what questions analysts can realistically answer, since the grain controls the types of queries the data can support. Once the grain is defined, everything else — measures, dimensions, table size, and the kinds of analysis you can support — flows directly from that choice. Getting the grain right early is essential; changing it later effectively requires redesigning and reloading the entire fact table.
@@ -1244,20 +1284,15 @@ Imagine you run a pizza shop and want to store sales data. You have several choi
 
 Choosing the grain is not about how many dimension fields a row contains, but about the level of aggregation each row represents; dimensions naturally follow from that decision — not the other way around. Grain defines the level of measurement, while dimensions provide the context needed to interpret that measurement. That’s why, in modeling, we define grain before adding measures or columns.
 
-##### <h4>Articulate Grain</h4>
-
-**Conceptual template for describing grain:** “One row per [`business event or entity`] per [`dimension1`] per [`dimension2`] … per [`dimensionN`].”
-- [`business event or entity`] → the primary fact being measured (e.g., a sale, a click, an inventory snapshot).
-- [`dimension1` … `dimensionN`] → all the dimensions that uniquely identify a single row.
-
-**Example:** One row per sale per product per store per day<br>
-Each row represents a single combination of `sale`, `product`, `store`, and `day`.
-
 ##### <h4>Validate Grain</h4>
+
+When defining the grain of a fact table (e.g., sales), you must be explicit about what a single row represents.
 
 **Ask yourself:** "If I have two rows with the same `sale`, `product`, `store`, and `day`, can I tell them apart?"
 - If No: Your grain is too broad. You need another "per" (e.g., per Transaction ID).
 - If Yes: Your grain is perfectly defined. Every combination of those four things results in exactly one unique row.
+
+A valid grain means `one row = one clearly defined business occurrence`.
 
 #### Designing Fact Tables
 
@@ -1612,16 +1647,6 @@ Several of the procedures in the logical stage overlap with what we did in the c
 | 7. Handle Time & Drift (SCDs)          | Decide how to track history (Slowly Changing Dimensions).            | • Type 2 (History) is standard, but it creates "Evidence Bloat." Only track changes for attributes that actually matter for historical analysis.                                                                                                                           |
 | 8. Define Aggregation Strategy         | Plan for Materialized Views or OLAP Cubes.                           | • Pre-calculating totals speeds up dashboards but adds a "latency tax."                                                                                                                          |
 
-
-
-
-
-
-
-
-
-
-
 ### Visualize (Low-Level)
 
 At the logical stage, the model stops being purely descriptive and starts becoming actionable. This is where business entities turn into actual tables that a database can implement. <br>
@@ -1690,23 +1715,26 @@ The logical model is strengthened by thorough documentation, which provides the 
 
 ![relationship matrix example](images/relationship%20matrix.png)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 ## Physical
 
-The physical stage is where we translate our logical model into a specific database engine (e.g., PostgreSQL, MySQL). Here, we make trade-offs between storage space, write speed, and read latency. We no longer care just about what the data is, but how it is physically laid out on the disk. In OLTP, every millisecond counts because these systems handle "live" traffic.
+#### Choose a Storage Engine 
 
+The physical stage is where we translate our logical model into a specific [database engine](https://dev.to/gervaisamoah/row-vs-columnar-data-stores-why-your-choice-matters-more-than-you-think-2h11). Here, we make trade-offs between storage space, write speed, and read latency. 
+
+While OLTP databases (PostgreSQL/MySQL) store data in rows, most modern OLAP engines (ClickHouse, Snowflake, BigQuery, DuckDB) store data in columns. Columnar storage is slower for inserting individual rows - although batch/bulk inserts are fast - but much faster for scanning and aggregating billions of rows. Row-based storage engines are optimized for OLTP, whereas columnar engines are designed for OLAP.
+
+**Columnar Database Engines**
+- Cloud: Snowflake, Google BigQuery, Amazon Redshift, Azure Synapse Analytics
+- Open Source: ClickHouse, Apache Druid, DuckDB, Apache Parquet (not a database but widely used columnar file format)
+- NoSQL: Cassandra, HBase (wide-column stores)
+
+**Row-based Database Engines**
+- Cloud: Amazon Aurora (PostgreSQL/MySQL-compatible), Azure SQL Database, Google Cloud SQL (PostgreSQL/MySQL)
+- Open Source: PostgreSQL, MySQL, MariaDB
+- NoSQL: MongoDB (document store), Redis (key-value store)
+
+**Enterprise Notes**<br>
+Many organizations continue to use Microsoft SQL Server and Oracle Database regardless of workload type. The reasons are largely enterprise inertia, ecosystem dominance, and existing skill sets, not necessarily architectural superiority. Both platforms have been around for decades, so companies naturally build on existing stacks with tools they can maintain. That said, both SQL Server and Oracle have evolved into hybrid engines, capable of supporting both row-based and columnar storage.
 
 ### OLTP 
 
@@ -1720,14 +1748,13 @@ The physical stage is where we translate our logical model into a specific datab
 | **Partitioning**         | Break massive tables into smaller, manageable physical chunks.              | • [Partition](https://medium.com/@iamthatsoftwareguy/a-beginners-guide-to-database-partitioning-cb21af515876) a `Transactions` table by `created_at` month.<br>• This allows the engine to "prune" unnecessary data, drastically increasing speed.                               |
 | **Denormalization**      | Selectively re-introduce redundancy for performance.                        | • Store frequently calculated values (e.g., "Total Order Price") as static columns instead of recalculating.<br>• Requires triggers or application logic to keep data in sync. |
 
-
-#### Constraints vs. Performance
+##### <h4>Constraints vs. Performance</h4>
 
 There is plenty of evidence that enforcing rules at the database level (Foreign Keys, Check Constraints) is the safest way to prevent "garbage data." However, in extreme high-scale OLTP environments, some teams move these rules to the Application Layer to reduce database CPU load.
 
 **Recommendation**: Start with full database enforcement. Only remove constraints if you have proof (through load testing) that the database is the bottleneck.
 
-#### Surrogate vs. Natural Keys
+##### <h4>Surrogate vs. Natural Keys</h4>
 
 To visualize why we favor Surrogate keys in the Physical stage, consider this comparison:
 
@@ -1739,6 +1766,66 @@ To visualize why we favor Surrogate keys in the Physical stage, consider this co
 | **Privacy**    | High (Anonymous)                 | Low (Exposes PII in FKs)   |
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### OLAP (under construction)
+
+In OLAP systems, the objective is to minimize disk I/O when executing large analytical queries and, since you are typically working with columnar engines, to maximize compression.
+
+#### Workflow
+
+| Step                       | Description                                     | Engineering Goal                                                                                                                                                                       |
+| -------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Select Data Types       | Prioritize precision and aggregatability.       | Use `DECIMAL` for money and `BIGINT` for counts. Avoid `FLOAT`; in OLAP, rounding errors across billions of rows can create significant inaccuracies.                                  |
+| 2. [Compression](https://www.devart.com/dbforge/sql/studio/sql-server-columnstore-indexes.html?utm_source=chatgpt.com) & Encoding  | Choose how the engine compresses columns.       | Use Run-Length Encoding (RLE) for columns with many repeated values (e.g., Status) and Delta Encoding for timestamps. This reduces disk I/O, the primary bottleneck in OLAP workloads. |
+| 3. Sort / Cluster Keys     | Define the physical order of data on disk.      | OLAP systems use sort keys instead of traditional B-tree indexes. Sorting by Date enables features like zone maps to skip large ranges of irrelevant data during scans.                |
+| 4. Partitioning            | Break tables into large, manageable chunks.     | [Partition](https://medium.com/@iamthatsoftwareguy/a-beginners-guide-to-database-partitioning-cb21af515876) by Year or Month. This enables fast data lifecycle management (e.g., dropping old partitions) and allows the optimizer to ignore irrelevant time ranges.                     |
+| 5. Distribution (Sharding) | Decide how data is distributed across servers (only for multi-node environments).  | In distributed systems, hash the fact table on a common key (e.g., Member_ID) to keep related data together and minimize network shuffling during joins.                               |
+| 6. Materialization         | Store precomputed results for frequent queries. | Create materialized views for commonly queried aggregates. This allows dashboards and executives to retrieve results instantly instead of scanning billions of rows.                   |
+
+
+
+#### Compression and Encoding
+
+Because columnar data stores similar values together (e.g., a column of "Country" will have "USA" repeated thousands of times), the database can compress the data much more effectively than a row-based system.
+- Dictionary Encoding: Instead of storing "United States" 1 million times, the DB stores the number 1 and a small lookup table.
+- Run-Length Encoding (RLE): If 1,000 consecutive rows are "2026-02-20", the DB stores "2026-02-20 x 1000".
+- Engineering Impact: This reduces the storage footprint by up to 90%, which directly translates to faster queries because there is less data to pull through the hardware "pipe."
+
+#### Physical Sorting (The "Cluster" Key)
+
+The Physical Order of rows on the disk is the most powerful performance lever you have.
+- The Concept: If you physically sort your Sales fact table by Transaction_Date, the database knows exactly which blocks of the disk to skip when someone queries "Sales for February."
+- Zone Maps/Min-Max Indexes: Columnar engines store metadata about each block (e.g., "This block contains dates from Jan 1 to Jan 5"). If the query is for Jan 10, the CPU skips the Jan 1 block entirely without even looking at the data.
+
+#### Projections and Materialized Views
+
+We often store the same data twice in different physical shapes to optimize for different questions.
+- Projection A: Sorted by Customer_ID (Fast for "User History" queries).
+- Projection B: Sorted by Product_ID (Fast for "Inventory Trend" queries).
+- The Trade-off: You trade disk space for speed. In OLAP, redundancy is a feature, not a bug.
+
+#### Critical Check
+
+Before finalizing the physical design, ask yourself these three questions:
+1. The Weighted Average Check: Did I store the numerator and denominator so the physical engine can calculate a correct ratio, or did I just store a "Non-Additive" percentage?
+2. The Snapshot Check: Does every semi-additive row have a physical timestamp anchor so it doesn't become "homeless"?
+3. The History Check: Did I use Surrogate Keys? If I used "Email" as the join key and the user changes their email, my physical links will break or misrepresent history.
 
 ### Test Queries
 
