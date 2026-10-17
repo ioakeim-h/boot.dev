@@ -178,6 +178,10 @@ fmt.Println(string(data))
 
 # URIs
 
+URLs are the primary addressing system of the web. There are 8 main parts to a URL, though not all the sections are always present. Each piece plays a role in helping clients locate the resources they're looking for.
+
+![Parts of a URL](img/url_parts.png)
+
 ## Deconstructing URLs
 
 URLs pack multiple pieces of distinct communication into one compact string. URL Parsing breaks this string into structured components (scheme, host, path, query parameters, fragment).
