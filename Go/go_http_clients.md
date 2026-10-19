@@ -1,13 +1,20 @@
-## net/http
-
-Go's standard `net/http` package provides the tools for making HTTP requests and handling responses. 
-
-
-The `http.Client` type, part of this package, sends HTTP requests and lets you configure how they are sent.
-
-
-
-
+- [Sending and Receiving JSON](#sending-and-receiving-json)
+	- [Decoding JSON](#decoding-json)
+		- [Struct](#struct)
+		- [Map](#map)
+		- [json.Unmarshal vs json.Decoder](#jsonunmarshal-vs-jsondecoder)
+	- [Encoding JSON](#encoding-json)
+- [URIs](#uris)
+	- [Deconstructing URLs](#deconstructing-urls)
+- [Headers](#headers)
+	- [Common Methods](#common-methods)
+- [Methods](#methods)
+	- [GET Requests](#get-requests)
+	- [POST Requests](#post-requests)
+	- [PUT Requests](#put-requests)
+		- [POST vs. PUT](#post-vs-put)
+	- [Delete Requests](#delete-requests)
+	- [Status Codes](#status-codes)
 
 # Sending and Receiving JSON
 
@@ -257,9 +264,56 @@ As developers, we can also define custom headers in each request.
 
 Headers are useful for several reasons from design to security, but most often headers are used for metadata about the request or response itself. [Authentication](https://auth0.com/intro-to-iam/what-is-authentication) is a common use case for headers. For example, when making an API request, you may need to include an authentication token to prove your identity. This information is not the request itself, but additional information that tells the server who is making the request and whether they are authorized to access the resource.
 
+## Common Methods
+
+HTTP headers are represented by the type `http.Header`, which is defined as: 
+```go
+type Header map[string][]string
+```
+
+Because it maps strings to slices of strings, a single header key can hold multiple values.
+
+**Reading a Header (`.Get()`)**<br>
+Returns the first value associated with the given key, or an empty string "" if the key is not present.
+
+```go
+// Works on both http.Request and http.Response
+contentType := res.Header.Get("Content-Type")
+apiKey := req.Header.Get("X-API-Key")
+```
+
+**Setting / Overwriting a Header (`.Set()`)**<br>
+Sets the key to the provided value, replacing any existing values for that key.
+
+```go
+req.Header.Set("Content-Type", "application/json")
+req.Header.Set("Authorization", "Bearer " + token)
+```
+
+**Adding Multiple Values (`.Add()`)**<br>
+Appends a value to any existing values for that key rather than overwriting.
+
+```go
+req.Header.Add("Accept", "application/json")
+req.Header.Add("Accept", "text/plain")
+```
+
+**Deleting a Header (`.Del()`)**<br>
+Removes the header completely.
+
+```go
+res.Header.Del("Cache-Control")
+```
+
 # Methods
 
-## Making a GET Request in Go
+The primary purpose of HTTP methods is to indicate to the server what we want to do with the resource we're trying to interact with. At the end of the day, an HTTP method is just a string, like `GET`, `POST`, `PUT`, or `DELETE`, but by convention, backend developers write their server code so that the methods correspond with different "CRUD" actions.
+
+The 4 most common HTTP methods map nicely to the CRUD actions:
+
+![http methods mapping to crud](img/http_methods_crud.png)
+
+## GET Requests
 
 There are two basic ways to make a Get request in Go.
 
@@ -272,7 +326,7 @@ If all you need to do is make a simple GET request to a URL, `http.Get` will wor
 resp, err := http.Get("https://jsonplaceholder.typicode.com/users")
 ```
 
-If you need to customize things like headers, cookies, or timeouts, you'll want to create a custom `http.Client`, and `http.NewRequest`, then use the client's `Do` method to execute it.
+If you need to customize things like headers, cookies, or timeouts, you'll want to create a custom [`http.Client`](https://pkg.go.dev/net/http#Client), and [`http.NewRequest`](https://pkg.go.dev/net/http#NewRequest), then use the client's [`Do`](https://pkg.go.dev/net/http#Client.Do) method to execute it.
 
 ```go
 client := &http.Client{
@@ -286,3 +340,202 @@ if err != nil {
 
 resp, err := client.Do(req)
 ```
+
+## POST Requests
+
+`POST` requests send data to a server. They are generally *not safe* methods to call multiple times because that would create duplicate records.
+
+In Go, there are two ways to make a `POST` request:
+1. [`http.Post`](https://pkg.go.dev/net/http#Post) 
+2. [`http.NewRequest`] (preferred for greater flexibility)
+
+`http.Post` works only for simple requests where `Content-Type` is the only header you care about, while `http.NewRequest` allows full configuration before sending.
+
+```go
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+)
+
+type Comment struct {
+	Id      string `json:"id"`
+	UserId  string `json:"user_id"`
+	Comment string `json:"comment"`
+}
+
+func createComment(url, apiKey string, commentStruct Comment) (Comment, error) {
+    // encode our comment as json
+	jsonData, err := json.Marshal(commentStruct)
+	if err != nil {
+		return Comment{}, err
+	}
+
+    // create a new request
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return Comment{}, err
+	}
+
+    // set request headers
+	req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("X-API-Key", apiKey)
+
+    // create a new client and make the request
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		return Comment{}, err
+	}
+	defer res.Body.Close()
+
+    // decode the json data from the response
+	// into a new Comment struct
+	var comment Comment
+	decoder := json.NewDecoder(res.Body)
+	err = decoder.Decode(&comment)
+	if err != nil {
+		return Comment{}, err
+	}
+
+	return comment, nil
+}
+```
+
+Since we are sending data, it must first be in the right format to travel over the web (i.e., JSON bytes). That is why we marshal it. Then, we create a new `POST` request using `bytes.NewBuffer`, which creates an `io.Reader` (i.e., a reader that reads from a byte buffer) from the JSON data.
+
+Next, we modify the request headers. The `Body` of the request is the payload sent to the server. The special `Content-Type` header tells the server the format of the body (`application/json` for JSON data in this example). We also set the `X-API-Key` header to provide the API key.
+
+We then create a new `http.Client` and use its `Do` method to make the request. Finally, we decode the JSON data from the response body into a Go `Comment` struct and return it.
+
+## PUT Requests
+
+The HTTP `PUT` method creates or more commonly, updates the target resource with the contents of the request's body. Unlike `GET` and `POST`, there is no `http.Put` function. You will have to create an `http.NewRequest` that an `http.Client` can [`Do`](https://pkg.go.dev/net/http#Client.Do).
+
+```go
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+)
+
+func updateUser(baseURL, id, apiKey string, data User) (User, error) {
+	fullURL := baseURL + "/" + id
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return User{}, err
+	}
+
+	req, err := http.NewRequest("PUT", fullURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return User{}, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", apiKey)
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		return User{}, err
+	}
+	defer res.Body.Close()
+
+	var user User
+    decoder := json.NewDecoder(res.Body)    
+    err = decoder.Decode(&user)           
+    if err != nil {
+        return User{}, err
+    }
+	
+	return user, nil
+}
+```
+
+### POST vs. PUT
+
+While POST and PUT are both used for creating resources, PUT is more common for updates and is idempotent, meaning it's safe to make the same request multiple times without changing the server state more than once. For example:
+
+```
+POST /users/bob (create bob user)
+POST /users/bob (create duplicate bob user)
+POST /users/bob (create duplicate bob user)
+```
+
+```
+PUT /users/bob (create bob user if it doesn't exist)
+PUT /users/bob (update bob user with the same data)
+PUT /users/bob (update bob user with the same data)
+```
+
+## Delete Requests
+
+The `DELETE` method does exactly what you expect: it deletes a specified resource.
+
+```go
+import (
+	"net/http"
+)
+
+func deleteUser(baseURL, id, apiKey string) error {
+	fullURL := baseURL + "/" + id
+
+	req, err := http.NewRequest("DELETE", fullURL, nil)
+	req.Header.Set("X-API-Key", apiKey)
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	return nil
+}
+```
+
+## Status Codes
+
+The `Status Code` of an HTTP response tells the client whether or not the server was able to fulfill the request. Status codes are 3-digit numbers that are grouped into categories:
+
+- `100-199`: Informational responses. These are very rare.
+- `200-299`: Successful responses. 
+- `300-399`: Redirection messages. These are typically invisible because the browser or HTTP client will automatically do the redirect.
+- `400-499`: Client errors. You'll see these often, especially when trying to debug a client application
+- `500-599`: Server errors. You'll see these sometimes, usually only if there is a bug on the server.
+
+The [`http.Response`](https://pkg.go.dev/net/http#Response) struct has a `.StatusCode` property that contains the status code of the response.
+
+```go
+func deleteLocation() error {
+	url := "https://api.boot.dev/v1/courses_rest_api/learn-http/locations/52fdfc07-2182-454f-963f-5f0f9a621d72"
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode > 299 {
+		return fmt.Errorf("request to delete location unsuccessful")
+	}
+	return nil
+}
+```
+
+**Common Status Codes**
+
+- `200` - OK. This means that everything worked as expected.
+- `201` - Created. This means that a resource was created successfully. Typically in response to a `POST` request.
+- `301` - Moved permanently. This means the resource was moved to a new place, and the response will include where that new place is. Websites often use `301` redirects when they change their domain name, for example.
+- `400` - Bad request. A general error indicating the client made a mistake in their request.
+- `401` - Unauthorized. This means the client doesn't have the correct permissions. Maybe they didn't include a required authorization header, for example.
+- `404` - Not found. You'll see this on websites quite often. It just means the resource doesn't exist.
+- `500` - Internal server error. This means something went wrong on the server, likely a bug on their end.
+
