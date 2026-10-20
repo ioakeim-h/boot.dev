@@ -15,6 +15,15 @@
 		- [POST vs. PUT](#post-vs-put)
 	- [Delete Requests](#delete-requests)
 	- [Status Codes](#status-codes)
+		- [Non-Ok Responses](#non-ok-responses)
+- [Paths](#paths)
+	- [REST APIs](#rest-apis)
+	- [URL Query Parameters](#url-query-parameters)
+- [cURL](#curl)
+	- [cURL GET Request](#curl-get-request)
+	- [cURL POST Request](#curl-post-request)
+	- [jq](#jq)
+		- [Extract fields](#extract-fields)
 
 # Sending and Receiving JSON
 
@@ -539,3 +548,143 @@ func deleteLocation() error {
 - `404` - Not found. You'll see this on websites quite often. It just means the resource doesn't exist.
 - `500` - Internal server error. This means something went wrong on the server, likely a bug on their end.
 
+### Non-Ok Responses
+
+Even if the request is successful, the server may return a non-OK HTTP status code (e.g., 404 Not Found, 500 Internal Server Error). These responses need to be handled separately from network errors.
+
+```go
+res, err := http.Get("https://example.com/api/resource")
+if err != nil {
+    fmt.Println("a network error occurred")
+    return
+}
+defer res.Body.Close()
+
+if res.StatusCode != http.StatusOK {
+    fmt.Println("status code != 200")
+    return
+}
+```
+
+A successful response usually has a status code of `http.StatusOK` (200), but it can be any code between `200` and `299`.
+
+# Paths
+
+## REST APIs
+
+[REST](https://developer.mozilla.org/en-US/docs/Glossary/REST) is a set of conventions about how HTTP APIs should be built. A RESTful architecture is stateless, which means the server does not need to know what state the client is in, nor does the client need to know what state the server is in. Statelessness in REST is enforced by interacting with resources.
+
+In a RESTful API, the last section of the path of a URL specifies the resource. For example, `users` in `https://api.boot.dev/v1/courses_rest_api/learn-http/users` identifies the users resource. HTTP methods such as `GET`, `POST`, `PUT`, and `DELETE` define the operation to perform on that resource.
+
+## URL Query Parameters
+
+A URL's query parameters appear after the path in the URL structure but are not always present - they're optional. For example, `q=boot.dev` in `https://www.google.com/search?q=boot.dev` is a query parameter. Like headers, query parameters are `key / value` pairs. In this case, `q` is the key and `boot.dev` is the value.
+
+There can be multiple query parameters:
+
+```
+http://example.com?firstName=lane&lastName=wagner
+```
+
+In the example above:
+
+`firstName` = `lane`
+`lastName` = `wagner`
+
+The `?` separates the query parameters from the rest of the URL. The `&` is then used to separate each additional pair of query parameters after that.
+
+# cURL
+
+`cURL` is a command-line tool for transferring data using various protocols, like HTTP and HTTPS. It's a favorite among developers. Among other things, developers use cURL for:
+
+- **Quick testing**: make HTTP requests with a single command.
+- **Automation**: can seamlessly be integrated into scripts and automation workflows.
+- **Debugging**: easily see requests and responses.
+
+Install cURL on Debian-based systems with:
+
+```bash
+sudo apt install curl
+```
+
+cURL supports a number of options and commands, outlined in their [tutorial page](https://curl.se/docs/tutorial.html). 
+
+## cURL GET Request
+
+The simplest cURL command makes a GET request to the provided URL, for example:
+
+```bash
+curl https://jsonplaceholder.typicode.com/users/1
+```
+
+The response body is written to stdout. Because the output is written to stdout you can combine it with other commands, e.g. redirecting the output to a file.
+
+```bash
+curl https://jsonplaceholder.typicode.com/users/1 > user1.json
+```
+
+## cURL POST Request
+
+Making a `POST` request with cURL is almost as simple as a GET request. Use the` -X POST` option (not `-x`) to specify the request method and the `-d` option to pass data.
+
+Here's how to make a POST request:
+
+```bash
+curl -X POST http://example.com/resource -d "param1=value1&param2=value2"
+```
+
+This command makes an HTTP `POST` request to `http://example.com/resource` with the data `param1=value1&param2=value2`. The server's response body is written to `stdout`.
+
+If you need to send JSON data, use the `-H` option to set the `Content-Type` header and the `-d` option to pass the JSON data:
+
+```bash
+curl -X POST http://example.com/resource -H "Content-Type: application/json" -d '{"key1":"value1","key2":"value2"}'
+```
+
+## jq
+
+[`jq`](https://github.com/jqlang/jq) is a powerful command-line tool for processing JSON data. It's a favorite among developers for working with JSON because it can:
+
+- **Parse JSON**: easily read and extract data from JSON responses.
+- **Manipulate JSON**: modify JSON data on the fly.
+- **Filter JSON**: find exactly what you're looking for within large JSON structures.
+
+Install on Debian-based systems (like Ubuntu/WSL) with:
+
+```bash
+sudo apt-get update
+sudo apt-get install jq
+```
+
+### Extract fields
+
+jq is frequently used with cURL to parse JSON responses directly from HTTP requests. For example, to fetch JSON data from an API and extract a field we can use the [object identifier index](https://jqlang.org/manual/#object-identifier-index):
+
+```bash
+curl https://jsonplaceholder.typicode.com/users/1 | jq .username
+# "Bret"
+```
+
+To get a field from each element in an array you can use the [array/object value iterator](https://jqlang.org/manual/#array-object-value-iterator) `.[]`, which can in turn be combined with the identifier index:
+
+```bash
+curl https://jsonplaceholder.typicode.com/users | jq '.[].username'
+# "Bret"
+# "Antonette"
+# "Samantha"
+# "Karianne"
+# "Kamren"
+# "Leopoldo_Corkery"
+# "Elwyn.Skiles"
+# "Maxime_Nienow"
+# "Delphine"
+# "Moriah.Stanton"
+```
+
+To get multiple fields:
+
+```bash
+curl https://jsonplaceholder.typicode.com/users/1 | jq '.name, .email'
+# "Leanne Graham"
+# "Sincere@april.biz"
+```
